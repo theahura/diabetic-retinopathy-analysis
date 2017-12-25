@@ -1,4 +1,26 @@
-Implementation of http://www.sciencedirect.com/science/article/pii/S0161642016317742?via%3Dihub in Tensorflow
+Attempting to solve Kaggle Diabetic Retinopathy Challenge.
 
-hi this is darnel
-amol says hi
+https://www.kaggle.com/c/diabetic-retinopathy-detection
+
+
+--------------------------------------------------------------------------------
+
+Current model based on:
+  http://jeffreydf.github.io/diabetic-retinopathy-detection/
+
+Possible sources of model inspiration:
+  densenet
+  resnet
+  inception-v4 + resnet
+
+Needed preprocessing:
+  cropping
+  rotation
+  flipping
+  normalization
+    brightness
+    contrast
+    color balance
+  zooming
+  oversampling on less represented points
+
