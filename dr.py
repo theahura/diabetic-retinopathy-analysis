@@ -1,7 +1,5 @@
 """
 Batcher, model, training.
-
-- Make batching multithreaded
 """
 
 import os
@@ -20,36 +18,48 @@ rng = np.random.RandomState(128)
 
 # Globals, hyperparameters.
 SUMMARIES_EVERY_N = 5
-VALIDATION_EVERY_N = 100
-BATCH_SIZE = 64
+VALIDATION_EVERY_N = 10
+BATCH_SIZE = 16
+VAL_BATCH_SIZE = 16
 
 L2_REG = 0.0005
 LEARN_RATE = 0.1
 
+RESTORE = True
 LAST_N_VAL = 10
 NUM_LABELS = 5
 LABELS_FP = './trainLabels.csv'
 DATA_FP = './train'
-LOGDIR = './logs'
-CKPTS = './ckpts'
+LOGDIR = './logs/'
+CKPTS = './ckpts/'
 
 
 def get_accuracies(session, preds, labels):
-    accs = np.zeros(5)
-    counts = np.bincount(labels)
+    accs = np.zeros(NUM_LABELS)
+    counts = np.bincount(labels, minlength=NUM_LABELS)
     for p, l in zip(preds, labels):
         if p == l:
             accs[l] += 1
     accs /= counts
 
-    summaries = []
-    for i, acc in enumerate(accs):
-        summaries.append(tf.summary.scalar('acc/' + str(i), acc))
+    print "Accuracies:"
+    print accs
+    print "Counts:"
+    print counts
+    print "Predictions:"
+    print preds
 
-    return session.run(tf.summary.merge(summaries))
+    return accs
+
+
+def get_accuracy_summaries(session, accs, op, plhlds):
+    inputs = {plhlds[i]: accs[i] for i in range(NUM_LABELS)}
+    return session.run(op, inputs)
+
 
 def open_files(f):
     return cv2.imread(f)
+
 
 class Batcher(object):
 
@@ -92,8 +102,12 @@ class Batcher(object):
             self.val_data = self.data.iloc[-val_slice:]
             self.data = self.data.iloc[:-val_slice]
             print 'Getting validation arrays'
-            threading.Thread(target=self._load_val_arrays).start()
-        threading.Thread(target=self._get_batch, args=(BATCH_SIZE,)).start()
+            thread = threading.Thread(target=self._load_val_arrays)
+            thread.daemon = True
+            thread.start()
+        thread = threading.Thread(target=self._get_batch, args=(BATCH_SIZE,))
+        thread.daemon = True
+        thread.start()
 
     def _load_val_arrays(self):
         self.val_arrays = np.stack(self.val_data['filename'].map(open_files).values)
@@ -115,7 +129,9 @@ class Batcher(object):
         while not self.next_batch_flag: pass;
         next_batch = self.next_batch_data, self.next_batch_arrays
         self.next_batch_flag = False
-        threading.Thread(target=self._get_batch, args=(size,)).start()
+        thread = threading.Thread(target=self._get_batch, args=(size,))
+        thread.daemon = True
+        thread.start()
         return next_batch
 
     def get_validation_batch(self, size):
@@ -160,7 +176,7 @@ class Model(object):
             net = slim.fully_connected(net, 1024)
             net = slim.dropout(net, 0.5, is_training=is_training)
             self.logits = slim.fully_connected(net, NUM_LABELS)
-            self.preds = tf.argmax(self.logits)
+            self.preds = tf.argmax(self.logits, 1)
 
         # Losses.
         self.labels = tf.placeholder(tf.float32, name='labels')
@@ -179,7 +195,7 @@ class Model(object):
         self.train = op.apply_gradients(grads_and_vars,
                                         global_step=self.global_step)
 
-        # Summaries.
+        # Model Summaries.
         _loss = tf.summary.scalar('model/tot_loss', tf.reduce_mean(self.total_loss))
         _reg = tf.summary.scalar('model/reg_losses', tf.reduce_mean(self.norm_loss))
         _grad_norm = tf.summary.scalar('model/grad_norm', tf.global_norm(self.grads))
@@ -197,22 +213,34 @@ batcher = Batcher(DATA_FP, LABELS_FP, True)
 model = Model()
 sess = tf.Session()
 
-# Summary writer.
+# Summary writer, acc ops.
 writer = tf.summary.FileWriter(LOGDIR, sess.graph, flush_secs=60)
+
+_acc_plhlds = [tf.placeholder(tf.float32, name='acc_' + str(i)) for i in range(NUM_LABELS)]
+_accs = [tf.summary.scalar('acc/' + str(i), _acc_plhlds[i]) for i in range(NUM_LABELS)]
+_acc_sums = tf.summary.merge(_accs)
 
 # Training.
 step = 0
 sess.run(tf.global_variables_initializer())
+
+if RESTORE:
+    print 'RESTORING'
+    ckpt = tf.train.get_checkpoint_state(CKPTS)
+    if ckpt and tf.train.checkpoint_exists(ckpt.model_checkpoint_path):
+        model.saver.restore(sess, ckpt.model_checkpoint_path)
+
 for i in range(0, 1000):
     if step % VALIDATION_EVERY_N == 0 and step > 1:
         print 'Validation'
         model.saver.save(sess, CKPTS, global_step=sess.run(model.global_step))
-        batch_data, batch_arrays = batcher.get_validation_batch(BATCH_SIZE)
+        batch_data, batch_arrays = batcher.get_validation_batch(VAL_BATCH_SIZE)
         inputs = {model.x: batch_arrays}
         preds = sess.run(model.preds, inputs)
-        accuracy = get_accuracies(sess, preds, batch_data['level'].as_matrix())
+        accs = get_accuracies(sess, preds, batch_data['level'].as_matrix())
+        accuracy_sum = get_accuracy_summaries(sess, accs, _acc_sums, _acc_plhlds)
 
-        writer.add_summary(tf.Summary.FromString(accuracy),
+        writer.add_summary(tf.Summary.FromString(accuracy_sum),
                            sess.run(model.global_step))
 
         writer.flush()
@@ -230,6 +258,7 @@ for i in range(0, 1000):
             fetched = sess.run([model.train, model.summary_op], inputs)
             writer.add_summary(tf.Summary.FromString(fetched[1]),
                                sess.run(model.global_step))
+            writer.flush()
         else:
             print 'Training'
             fetched = sess.run([model.train, model.total_loss], inputs)
