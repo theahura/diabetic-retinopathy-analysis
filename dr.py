@@ -84,9 +84,10 @@ class Batcher(object):
 
         # Balance class weights: num_samples/(num_classes*num_obs_per_class).
         counts = self.data['level'].value_counts()
-        n = len(self.data)
         c = len(counts)
+        n = max(counts)
         weights = [n/(c * counts[level] * 1.0) for level in self.data['level']]
+        weights = np.square(np.array(weights))
         self.data['weights'] = weights
 
         # Get onehots.
@@ -113,29 +114,31 @@ class Batcher(object):
         self.val_arrays = np.stack(self.val_data['filename'].map(open_files).values)
         self.val_flag = True
 
-    def _get_batch(self, size):
-        batch_data = self.data.iloc[self.index:self.index+size]
-        self.index += size
+    def _get_batch(self, size, step=0):
+        #batch_data = self.data.iloc[self.index:self.index+size]
+        current_level = step % NUM_LABELS
+        batch_data = self.data.loc[self.data['level'] == current_level].sample(size)
+        #self.index += size
 
-        if self.index > len(self.data):
-            self.index = 0
+        #if self.index > len(self.data):
+        #    self.index = 0
 
         batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
         self.next_batch_data = batch_data
         self.next_batch_arrays = batch_arrays
         self.next_batch_flag = True
 
-    def get_batch(self, size):
-        while not self.next_batch_flag: pass;
+    def get_batch(self, size, step):
+        while not self.next_batch_flag: pass
         next_batch = self.next_batch_data, self.next_batch_arrays
         self.next_batch_flag = False
-        thread = threading.Thread(target=self._get_batch, args=(size,))
+        thread = threading.Thread(target=self._get_batch, args=(size,step))
         thread.daemon = True
         thread.start()
         return next_batch
 
     def get_validation_batch(self, size):
-        while not self.val_flag: pass;
+        while not self.val_flag: pass
         indices = np.random.choice(len(self.val_data), size, replace=False)
         return self.val_data.iloc[indices], self.val_arrays[indices]
 
@@ -172,23 +175,25 @@ class Model(object):
             # Dense layers.
             net = slim.flatten(net)
             net = slim.fully_connected(net, 1024)
-            net = slim.dropout(net, 0.5, is_training=is_training)
+            #net = slim.dropout(net, 0.5, is_training=is_training)
             net = slim.fully_connected(net, 1024)
-            net = slim.dropout(net, 0.5, is_training=is_training)
+            #net = slim.dropout(net, 0.5, is_training=is_training)
             self.logits = slim.fully_connected(net, NUM_LABELS)
             self.preds = tf.argmax(self.logits, 1)
 
         # Losses.
+        # Dont use weights if using skewed batch sampling.
         self.labels = tf.placeholder(tf.float32, name='labels')
         self.crossent_loss = tf.losses.softmax_cross_entropy(self.labels,
-                                                             self.logits,
-                                                             self.weights)
+                                                             self.logits)
+                                                             #self.weights)
         self.norm_loss = tf.losses.get_regularization_losses()
         self.total_loss = tf.losses.get_total_loss()
 
         # Optimizer.
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
-        op = tf.train.AdamOptimizer(LEARN_RATE)
+        #op = tf.train.AdamOptimizer(LEARN_RATE)
+        op = tf.train.GradientDescentOptimizer(0.001)
         net_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         self.grads = tf.gradients(self.total_loss, net_vars)
         grads_and_vars = list(zip(self.grads, net_vars))
@@ -223,48 +228,53 @@ _acc_sums = tf.summary.merge(_accs)
 # Training.
 step = 0
 sess.run(tf.global_variables_initializer())
-
 if RESTORE:
     print 'RESTORING'
     ckpt = tf.train.get_checkpoint_state(CKPTS)
     if ckpt and tf.train.checkpoint_exists(ckpt.model_checkpoint_path):
         model.saver.restore(sess, ckpt.model_checkpoint_path)
-
-for i in range(0, 1000):
-    if step % VALIDATION_EVERY_N == 0 and step > 1:
-        print 'Validation'
-        model.saver.save(sess, CKPTS, global_step=sess.run(model.global_step))
-        batch_data, batch_arrays = batcher.get_validation_batch(VAL_BATCH_SIZE)
-        inputs = {model.x: batch_arrays}
-        preds = sess.run(model.preds, inputs)
-        accs = get_accuracies(sess, preds, batch_data['level'].as_matrix())
-        accuracy_sum = get_accuracy_summaries(sess, accs, _acc_sums, _acc_plhlds)
-
-        writer.add_summary(tf.Summary.FromString(accuracy_sum),
-                           sess.run(model.global_step))
-
-        writer.flush()
     else:
-        batch_data, batch_arrays = batcher.get_batch(BATCH_SIZE)
-        print "Got batch"
-        inputs = {
-            model.x: batch_arrays,
-            model.weights: batch_data['weights'].as_matrix(),
-            model.labels: np.stack(batch_data['labels'].values)
-        }
-
-        if step % SUMMARIES_EVERY_N == 0 and step > 1:
-            print 'Summary'
-            fetched = sess.run([model.train, model.summary_op], inputs)
-            writer.add_summary(tf.Summary.FromString(fetched[1]),
-                               sess.run(model.global_step))
-            writer.flush()
-        else:
-            print 'Training'
-            fetched = sess.run([model.train, model.total_loss], inputs)
-            print 'Loss: %f' % fetched[1]
-
-    step += 1
-    print i
+        print 'restore failed'
 
 IPython.embed()
+
+try:
+    for i in range(0, 1000):
+        if step % VALIDATION_EVERY_N == 0 and step > 1:
+            print 'Validation'
+            model.saver.save(sess, CKPTS, global_step=sess.run(model.global_step))
+            batch_data, batch_arrays = batcher.get_validation_batch(VAL_BATCH_SIZE)
+            inputs = {model.x: batch_arrays}
+            preds = sess.run(model.preds, inputs)
+            accs = get_accuracies(sess, preds, batch_data['level'].as_matrix())
+            accuracy_sum = get_accuracy_summaries(sess, accs, _acc_sums, _acc_plhlds)
+
+            writer.add_summary(tf.Summary.FromString(accuracy_sum),
+                               sess.run(model.global_step))
+
+            writer.flush()
+        else:
+            batch_data, batch_arrays = batcher.get_batch(BATCH_SIZE, step)
+            print "Got batch"
+            print batch_data['level'].values
+            inputs = {
+                model.x: batch_arrays,
+                model.weights: batch_data['weights'].as_matrix(),
+                model.labels: np.stack(batch_data['labels'].values)
+            }
+
+            if step % SUMMARIES_EVERY_N == 0 and step > 1:
+                print 'Summary'
+                fetched = sess.run([model.train, model.summary_op], inputs)
+                writer.add_summary(tf.Summary.FromString(fetched[1]),
+                                   sess.run(model.global_step))
+                writer.flush()
+            else:
+                print 'Training'
+                fetched = sess.run([model.train, model.total_loss], inputs)
+                print 'Loss: %f' % fetched[1]
+
+        step += 1
+        print i
+except KeyboardInterrupt:
+   IPython.embed()
