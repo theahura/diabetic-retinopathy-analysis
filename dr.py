@@ -1,5 +1,7 @@
 """
 Batcher, model, training.
+
+
 """
 
 import os
@@ -87,7 +89,6 @@ class Batcher(object):
         c = len(counts)
         n = max(counts)
         weights = [n/(c * counts[level] * 1.0) for level in self.data['level']]
-        weights = np.square(np.array(weights))
         self.data['weights'] = weights
 
         # Get onehots.
@@ -115,17 +116,17 @@ class Batcher(object):
         self.val_flag = True
 
     def _get_batch(self, size, step=0):
-        #batch_data = self.data.iloc[self.index:self.index+size]
-        current_level = step % NUM_LABELS
-        batch_data = self.data.loc[self.data['level'] == current_level].sample(size)
-        #self.index += size
+        #current_level = step % NUM_LABELS
+        #batch_data = self.data.loc[self.data['level'] == current_level].sample(size)
+        batch_data = self.data.iloc[self.index:self.index+size]
+        self.index += size
 
-        #if self.index > len(self.data):
-        #    self.index = 0
+        if self.index > len(self.data):
+            self.index = 0
 
         batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
         self.next_batch_data = batch_data
-        self.next_batch_arrays = batch_arrays
+        self.next_batch_arrays = batch_arrays/255.0
         self.next_batch_flag = True
 
     def get_batch(self, size, step):
@@ -150,50 +151,50 @@ class Model(object):
         self.is_training = is_training = tf.placeholder_with_default(True, shape=())
         self.weights = tf.placeholder(tf.float32, name='weights')
         with slim.arg_scope([slim.conv2d, slim.fully_connected],
-                            weights_regularizer=slim.l2_regularizer(L2_REG)):
+                            weights_regularizer=slim.l2_regularizer(L2_REG),
+                            activation_fn=tf.nn.leaky_relu):
             # Block one.
-            net = slim.conv2d(x, num_outputs=32, kernel_size=[7, 7], stride=2)
+            self.conv1 = net = slim.conv2d(x, num_outputs=32, kernel_size=[7, 7], stride=2)
             net = slim.batch_norm(net, is_training=is_training)
-            net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            self.pool1 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
             # Block two.
             net = slim.repeat(net, 2, slim.conv2d, 32, [3, 3])
             net = slim.batch_norm(net, is_training=is_training)
-            net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            self.pool2 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
             # Block three.
             net = slim.repeat(net, 2, slim.conv2d, 64, [3, 3])
             net = slim.batch_norm(net, is_training=is_training)
-            net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            self.pool3 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
             # Block four.
             net = slim.repeat(net, 4, slim.conv2d, 128, [3, 3])
             net = slim.batch_norm(net, is_training=is_training)
-            net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            self.pool4 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
             # Block five.
             net = slim.repeat(net, 4, slim.conv2d, 256, [3, 3])
             net = slim.batch_norm(net, is_training=is_training)
-            net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            self.pool5 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
 
             # Dense layers.
             net = slim.flatten(net)
-            net = slim.fully_connected(net, 1024)
-            #net = slim.dropout(net, 0.5, is_training=is_training)
-            net = slim.fully_connected(net, 1024)
-            #net = slim.dropout(net, 0.5, is_training=is_training)
+            self.fc1 = net = slim.fully_connected(net, 1024)
+            net = slim.dropout(net, 0.5, is_training=is_training)
+            self.fc2 = net = slim.fully_connected(net, 1024)
+            net = slim.dropout(net, 0.5, is_training=is_training)
             self.logits = slim.fully_connected(net, NUM_LABELS)
             self.preds = tf.argmax(self.logits, 1)
 
         # Losses.
-        # Dont use weights if using skewed batch sampling.
         self.labels = tf.placeholder(tf.float32, name='labels')
         self.crossent_loss = tf.losses.softmax_cross_entropy(self.labels,
-                                                             self.logits)
-                                                             #self.weights)
+                                                             self.logits,
+                                                             self.weights)
         self.norm_loss = tf.losses.get_regularization_losses()
         self.total_loss = tf.losses.get_total_loss()
 
         # Optimizer.
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
-        #op = tf.train.AdamOptimizer(LEARN_RATE)
-        op = tf.train.GradientDescentOptimizer(0.001)
+        op = tf.train.AdamOptimizer(LEARN_RATE)
+        #op = tf.train.GradientDescentOptimizer(0.001)
         net_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         self.grads = tf.gradients(self.total_loss, net_vars)
         grads_and_vars = list(zip(self.grads, net_vars))
@@ -271,8 +272,10 @@ try:
                 writer.flush()
             else:
                 print 'Training'
-                fetched = sess.run([model.train, model.total_loss], inputs)
+                fetched = sess.run([model.train, model.total_loss, model.preds], inputs)
                 print 'Loss: %f' % fetched[1]
+                print 'Predictions:'
+                print fetched[2]
 
         step += 1
         print i
