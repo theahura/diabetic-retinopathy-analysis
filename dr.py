@@ -3,11 +3,10 @@ Batcher, model, training.
 
 TODO:
     - try visualizing weights
-    - update sampling so that each batch is evenly composed
-    - add overall accuracy measure
 """
 
 import os
+import random
 
 import cv2
 import numpy as np
@@ -24,8 +23,8 @@ rng = np.random.RandomState(128)
 # Globals, hyperparameters.
 SUMMARIES_EVERY_N = 5
 VALIDATION_EVERY_N = 10
-BATCH_SIZE = 64
-VAL_BATCH_SIZE = 64
+BATCH_SIZE = 32
+VAL_BATCH_SIZE = 32
 
 L2_REG = 0.005
 LEARN_RATE = 0.01
@@ -122,25 +121,36 @@ class Batcher(object):
         self.val_arrays = np.stack(self.val_data['filename'].map(open_files).values)
         self.val_flag = True
 
-    def _get_batch(self, size, step=0):
-        #current_level = step % NUM_LABELS
-        #batch_data = self.data.loc[self.data['level'] == current_level].sample(size)
-        batch_data = self.data.iloc[self.index:self.index+size]
-        self.index += size
+    def _get_batch(self, size):
+        batch_data = pandas.DataFrame()
+        for i in range(NUM_LABELS):
+            label_data = self.data.loc[self.data['level'] == i].sample(size/NUM_LABELS)
+            batch_data = batch_data.append(label_data)
 
-        if self.index > len(self.data):
-            self.index = 0
+        if len(batch_data) < size:
+            rem = size - len(batch_data)
+            rem_class = random.randint(0, NUM_LABELS - 1)
+            label_data = self.data.loc[self.data['level'] == rem_class].sample(rem)
+            batch_data = batch_data.append(label_data)
+
+        # Instead of forced oversampling, sample normally and use class weights.
+        # UNCOMMENT CLASS WEIGHTS IN MODEL TO USE THIS.
+        #if self.index > len(self.data):
+        #    self.data.sample(frac=1)
+        #    self.index = 0
+        #batch_data = self.data.iloc[self.index:self.index+size]
+        #self.index += size
 
         batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
         self.next_batch_data = batch_data
         self.next_batch_arrays = batch_arrays/255.0
         self.next_batch_flag = True
 
-    def get_batch(self, size, step):
+    def get_batch(self, size):
         while not self.next_batch_flag: pass
         next_batch = self.next_batch_data, self.next_batch_arrays
         self.next_batch_flag = False
-        thread = threading.Thread(target=self._get_batch, args=(size,step))
+        thread = threading.Thread(target=self._get_batch, args=(size,))
         thread.daemon = True
         thread.start()
         return next_batch
@@ -157,29 +167,30 @@ class Model(object):
         self.x = x = tf.placeholder(tf.float32, shape=(None, 512, 512, 3), name='x')
         self.is_training = is_training = tf.placeholder_with_default(True, shape=())
         self.weights = tf.placeholder(tf.float32, name='weights')
+        tf.nn.leaky_relu.func_defaults = (0.3, None)
         with slim.arg_scope([slim.conv2d, slim.fully_connected],
                             weights_regularizer=slim.l2_regularizer(L2_REG),
                             activation_fn=tf.nn.leaky_relu):
             # Block one.
             self.conv1 = net = slim.conv2d(x, num_outputs=32, kernel_size=[7, 7], stride=2)
             net = slim.batch_norm(net, is_training=is_training)
-            self.pool1 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            self.pool1 = net = slim.max_pool2d(net, kernel_size=[2, 2], stride=2)
             # Block two.
             net = slim.repeat(net, 2, slim.conv2d, 32, [3, 3])
             net = slim.batch_norm(net, is_training=is_training)
-            self.pool2 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            self.pool2 = net = slim.max_pool2d(net, kernel_size=[2, 2], stride=2)
             # Block three.
             net = slim.repeat(net, 2, slim.conv2d, 64, [3, 3])
             net = slim.batch_norm(net, is_training=is_training)
-            self.pool3 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            self.pool3 = net = slim.max_pool2d(net, kernel_size=[2, 2], stride=2)
             # Block four.
             net = slim.repeat(net, 4, slim.conv2d, 128, [3, 3])
             net = slim.batch_norm(net, is_training=is_training)
-            self.pool4 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            self.pool4 = net = slim.max_pool2d(net, kernel_size=[2, 2], stride=2)
             # Block five.
             net = slim.repeat(net, 4, slim.conv2d, 256, [3, 3])
             net = slim.batch_norm(net, is_training=is_training)
-            self.pool5 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            self.pool5 = net = slim.max_pool2d(net, kernel_size=[2, 2], stride=2)
 
             # Dense layers.
             net = slim.flatten(net)
@@ -193,8 +204,8 @@ class Model(object):
         # Losses.
         self.labels = tf.placeholder(tf.int32, name='labels')
         self.crossent_loss = tf.losses.softmax_cross_entropy(self.labels,
-                                                             self.logits,
-                                                             self.weights)
+                                                             self.logits)
+                                                             #self.weights
         self.norm_loss = tf.losses.get_regularization_losses()
         self.total_loss = tf.losses.get_total_loss()
 
@@ -266,7 +277,7 @@ try:
 
             writer.flush()
         else:
-            batch_data, batch_arrays = batcher.get_batch(BATCH_SIZE, step)
+            batch_data, batch_arrays = batcher.get_batch(BATCH_SIZE)
             print "Got batch"
             print batch_data['level'].values
             inputs = {
