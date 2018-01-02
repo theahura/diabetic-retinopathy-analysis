@@ -2,7 +2,7 @@
 Batcher, model, training.
 
 TODO:
-    - try visualizing weights
+    - try visualizing activations on a single image
 """
 
 import os
@@ -22,12 +22,12 @@ rng = np.random.RandomState(128)
 
 # Globals, hyperparameters.
 SUMMARIES_EVERY_N = 5
-VALIDATION_EVERY_N = 10
-BATCH_SIZE = 32
-VAL_BATCH_SIZE = 32
+VALIDATION_EVERY_N = 20
+BATCH_SIZE = 64
+VAL_BATCH_SIZE = 64
 
 L2_REG = 0.005
-LEARN_RATE = 0.01
+LEARN_RATE = 0.001
 
 RESTORE = True
 LAST_N_VAL = 10
@@ -75,11 +75,12 @@ class Batcher(object):
 
         # Set initial vars.
         self.index = 0
-        self.val_flag = False
         self.next_batch_flag = False
         self.next_batch_data = None
         self.next_batch_arrays = None
-        self.val_arrays = None
+        self.next_val_flag = False
+        self.next_val_data = None
+        self.next_val_arrays = None
 
         # Get initial data.
         files = [os.path.join(data_fp, f) for f in os.listdir(data_fp)]
@@ -89,13 +90,6 @@ class Batcher(object):
         # Add filepath.
         files = sorted(files, key=lambda f: int(f.split('/')[-1].split('_')[0]))
         self.data['filename'] = files
-
-        # Balance class weights: num_samples/(num_classes*num_obs_per_class).
-        counts = self.data['level'].value_counts()
-        c = len(counts)
-        n = max(counts)
-        weights = [n/(c * counts[level] * 1.0) for level in self.data['level']]
-        self.data['weights'] = weights
 
         # Get onehots.
         onehots = np.eye(NUM_LABELS, dtype=int)
@@ -110,16 +104,20 @@ class Batcher(object):
             self.val_data = self.data.iloc[-val_slice:]
             self.data = self.data.iloc[:-val_slice]
             print 'Getting validation arrays'
-            thread = threading.Thread(target=self._load_val_arrays)
+            thread = threading.Thread(target=self._get_val_batch, args=(VAL_BATCH_SIZE,))
             thread.daemon = True
             thread.start()
         thread = threading.Thread(target=self._get_batch, args=(BATCH_SIZE,))
         thread.daemon = True
         thread.start()
 
-    def _load_val_arrays(self):
-        self.val_arrays = np.stack(self.val_data['filename'].map(open_files).values)
-        self.val_flag = True
+    def _get_val_batch(self, size):
+        indices = np.random.choice(len(self.val_data), size, replace=False)
+        batch_data = self.val_data.iloc[indices]
+        batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
+        self.next_val_data = batch_data
+        self.next_val_arrays = batch_arrays/255.0
+        self.next_val_flag = True
 
     def _get_batch(self, size):
         batch_data = pandas.DataFrame()
@@ -132,14 +130,6 @@ class Batcher(object):
             rem_class = random.randint(0, NUM_LABELS - 1)
             label_data = self.data.loc[self.data['level'] == rem_class].sample(rem)
             batch_data = batch_data.append(label_data)
-
-        # Instead of forced oversampling, sample normally and use class weights.
-        # UNCOMMENT CLASS WEIGHTS IN MODEL TO USE THIS.
-        #if self.index > len(self.data):
-        #    self.data.sample(frac=1)
-        #    self.index = 0
-        #batch_data = self.data.iloc[self.index:self.index+size]
-        #self.index += size
 
         batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
         self.next_batch_data = batch_data
@@ -156,9 +146,14 @@ class Batcher(object):
         return next_batch
 
     def get_validation_batch(self, size):
-        while not self.val_flag: pass
-        indices = np.random.choice(len(self.val_data), size, replace=False)
-        return self.val_data.iloc[indices], self.val_arrays[indices]
+        while not self.next_val_flag: pass
+        next_batch = self.next_val_data, self.next_val_arrays
+        self.next_val_flag = False
+        thread = threading.Thread(target=self._get_val_batch, args=(size,))
+        thread.daemon = True
+        thread.start()
+        return next_batch
+
 
 # Create network.
 class Model(object):
@@ -166,7 +161,6 @@ class Model(object):
     def __init__(self):
         self.x = x = tf.placeholder(tf.float32, shape=(None, 512, 512, 3), name='x')
         self.is_training = is_training = tf.placeholder_with_default(True, shape=())
-        self.weights = tf.placeholder(tf.float32, name='weights')
         tf.nn.leaky_relu.func_defaults = (0.3, None)
         with slim.arg_scope([slim.conv2d, slim.fully_connected],
                             weights_regularizer=slim.l2_regularizer(L2_REG),
@@ -205,16 +199,19 @@ class Model(object):
         self.labels = tf.placeholder(tf.int32, name='labels')
         self.crossent_loss = tf.losses.softmax_cross_entropy(self.labels,
                                                              self.logits)
-                                                             #self.weights
         self.norm_loss = tf.losses.get_regularization_losses()
         self.total_loss = tf.losses.get_total_loss()
 
         # Optimizer.
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
-        op = tf.train.AdamOptimizer(LEARN_RATE)
+        learning_rate = tf.train.exponential_decay(LEARN_RATE, self.global_step,
+                                                   20000, 0.5, staircase=True)
+        op = tf.train.MomentumOptimizer(learning_rate, 0.9, use_nesterov=True)
+        #op = tf.train.AdamOptimizer(LEARN_RATE)
         #op = tf.train.GradientDescentOptimizer(0.001)
         net_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-        self.grads = tf.gradients(self.total_loss, net_vars)
+        unclipped_grads = tf.gradients(self.total_loss, net_vars)
+        self.grads, _ = tf.clip_by_global_norm(unclipped_grads, 1000)
         grads_and_vars = list(zip(self.grads, net_vars))
         self.train = op.apply_gradients(grads_and_vars,
                                         global_step=self.global_step)
@@ -229,8 +226,18 @@ class Model(object):
         _t_acc = tf.summary.scalar(
             'acc/train_acc', tf.contrib.metrics.accuracy(self.preds, levels))
 
+        def reshape_filters(layer):
+            return tf.expand_dims(tf.transpose(layer[0, :, :, :], [2, 0, 1]), -1)
+        _conv1 = tf.summary.image('model/conv1', reshape_filters(self.conv1))
+        _pool1 = tf.summary.image('model/pool1', reshape_filters(self.pool1))
+        _pool2 = tf.summary.image('model/pool2', reshape_filters(self.pool2))
+        _pool3 = tf.summary.image('model/pool3', reshape_filters(self.pool3))
+        _pool4 = tf.summary.image('model/pool4', reshape_filters(self.pool4))
+        _pool5 = tf.summary.image('model/pool5', reshape_filters(self.pool5))
+
         self.summary_op = tf.summary.merge([_loss, _reg, _grad_norm, _var_norm,
-                                            _logits, _t_acc])
+                                            _logits, _t_acc, _conv1, _pool1,
+                                            _pool2, _pool3, _pool4, _pool5])
 
         self.saver = tf.train.Saver()
 
@@ -282,7 +289,6 @@ try:
             print batch_data['level'].values
             inputs = {
                 model.x: batch_arrays,
-                model.weights: batch_data['weights'].as_matrix(),
                 model.labels: np.stack(batch_data['labels'].values)
             }
 
