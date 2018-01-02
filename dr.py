@@ -269,7 +269,7 @@ if RESTORE:
 IPython.embed()
 
 try:
-    for i in range(0, 1000):
+    for i in range(0, 100000):
         if step % VALIDATION_EVERY_N == 0 and step > 1:
             print 'Validation'
             model.saver.save(sess, CKPTS_SAVE, global_step=sess.run(model.global_step))
