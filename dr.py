@@ -3,6 +3,7 @@ Batcher, model, training.
 
 TODO:
     - try visualizing activations on a single image
+    - prevent overfitting
 """
 
 import os
@@ -26,8 +27,15 @@ VALIDATION_EVERY_N = 20
 BATCH_SIZE = 64
 VAL_BATCH_SIZE = 64
 
+EVEN_CUTOFF = 15000
+
+MOMENTUM = 0.9
+
 L2_REG = 0.005
 LEARN_RATE = 0.001
+EXP_DECAY_STEP = 10000
+EXP_DECAY_RATE = 0.5
+
 
 RESTORE = True
 LAST_N_VAL = 10
@@ -35,8 +43,13 @@ NUM_LABELS = 5
 LABELS_FP = './trainLabels.csv'
 DATA_FP = './train'
 LOGDIR = './logs/'
-CKPTS_SAVE = './ckpts/model'
 CKPTS_RESTORE = './ckpts'
+
+fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_expdecay-%d-%f-%s' % (
+    BATCH_SIZE, L2_REG, LEARN_RATE, 'nesterov', MOMENTUM, EXP_DECAY_STEP,
+    EXP_DECAY_RATE, 'staircase')
+
+CKPTS_SAVE = CKPTS_RESTORE + '/' + fname
 
 
 def get_accuracies(session, preds, labels):
@@ -66,7 +79,33 @@ def get_accuracy_summaries(session, accs, op, plhlds):
 
 
 def open_files(f):
-    return cv2.imread(f)
+    im = cv2.imread(f)
+
+    rows, cols, _ = im.shape
+
+    # Rotation.
+    degrees = random.randint(0, 359)
+    rot_mat = cv2.getRotationMatrix2D((cols/2, rows/2), degrees, 1)
+    im = cv2.warpAffine(im, rot_mat, (cols, rows))
+
+    # Translation.
+    y_trans = random.randint(-rows/4, rows/4)
+    x_trans = random.randint(-cols/4, cols/4)
+    trans_mat = np.float32([[1, 0, x_trans], [0, 1, y_trans]])
+    im = cv2.warpAffine(im, trans_mat, (cols, rows))
+
+    # Flip.
+    choice = random.randint(0, 3)
+    if choice == 0:
+        im = cv2.flip(im, 0)
+    elif choice == 1:
+        im = cv2.flip(im, 1)
+    elif choice == 2:
+        im = cv2.flip(im, -1)
+
+    im[np.where((im==[0, 0, 0]).all(axis=2))] = [128, 128, 128]
+
+    return im
 
 
 class Batcher(object):
@@ -119,7 +158,7 @@ class Batcher(object):
         self.next_val_arrays = batch_arrays/255.0
         self.next_val_flag = True
 
-    def _get_batch(self, size):
+    def _get_even_batch(self, size):
         batch_data = pandas.DataFrame()
         for i in range(NUM_LABELS):
             label_data = self.data.loc[self.data['level'] == i].sample(size/NUM_LABELS)
@@ -136,11 +175,27 @@ class Batcher(object):
         self.next_batch_arrays = batch_arrays/255.0
         self.next_batch_flag = True
 
-    def get_batch(self, size):
+    def _get_batch(self, size):
+        batch_data = self.data.iloc[self.index:self.index + size]
+        self.index += size
+
+        if self.index > len(self.data):
+            self.index = 0
+
+        batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
+        self.next_batch_data = batch_data
+        self.next_batch_arrays = batch_arrays/255.0
+        self.next_batch_flag = True
+
+    def get_batch(self, size, even_sample=True):
         while not self.next_batch_flag: pass
         next_batch = self.next_batch_data, self.next_batch_arrays
         self.next_batch_flag = False
-        thread = threading.Thread(target=self._get_batch, args=(size,))
+
+        if even_sample:
+            thread = threading.Thread(target=self._get_even_batch, args=(size,))
+        else:
+            thread = threading.Thread(target=self._get_batch, args=(size,))
         thread.daemon = True
         thread.start()
         return next_batch
@@ -205,8 +260,9 @@ class Model(object):
         # Optimizer.
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
         learning_rate = tf.train.exponential_decay(LEARN_RATE, self.global_step,
-                                                   20000, 0.5, staircase=True)
-        op = tf.train.MomentumOptimizer(learning_rate, 0.9, use_nesterov=True)
+                                                   EXP_DECAY_STEP, EXP_DECAY_RATE,
+                                                   staircase=True)
+        op = tf.train.MomentumOptimizer(learning_rate, MOMENTUM, use_nesterov=True)
         #op = tf.train.AdamOptimizer(LEARN_RATE)
         #op = tf.train.GradientDescentOptimizer(0.001)
         net_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
@@ -269,7 +325,7 @@ if RESTORE:
 IPython.embed()
 
 try:
-    for i in range(0, 100000):
+    for i in range(step, 50000):
         if step % VALIDATION_EVERY_N == 0 and step > 1:
             print 'Validation'
             model.saver.save(sess, CKPTS_SAVE, global_step=sess.run(model.global_step))
@@ -284,7 +340,9 @@ try:
 
             writer.flush()
         else:
-            batch_data, batch_arrays = batcher.get_batch(BATCH_SIZE)
+
+            batch_data, batch_arrays = batcher.get_batch(BATCH_SIZE,
+                                                         i < EVEN_CUTOFF)
             print "Got batch"
             print batch_data['level'].values
             inputs = {

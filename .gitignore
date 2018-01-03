@@ -1,5 +1,6 @@
 test
 train
 *.csv
+*.swp
 logs
 ckpts
