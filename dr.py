@@ -2,8 +2,8 @@
 Batcher, model, training.
 
 TODO:
-    - try visualizing activations on a single image
-    - prevent overfitting
+    - add input image + label to summaries
+    - try visualizing activations on a single image (of each class?)
 """
 
 import os
@@ -27,13 +27,13 @@ VALIDATION_EVERY_N = 20
 BATCH_SIZE = 64
 VAL_BATCH_SIZE = 64
 
-EVEN_CUTOFF = 15000
+EVEN_CUTOFF = 50000
 
 MOMENTUM = 0.9
 
 L2_REG = 0.005
 LEARN_RATE = 0.001
-EXP_DECAY_STEP = 10000
+EXP_DECAY_STEP = 20000
 EXP_DECAY_RATE = 0.5
 
 
@@ -45,9 +45,9 @@ DATA_FP = './train'
 LOGDIR = './logs/'
 CKPTS_RESTORE = './ckpts'
 
-fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_expdecay-%d-%f-%s' % (
+fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_expdecay-%d-%f-%s_cutoff-%d' % (
     BATCH_SIZE, L2_REG, LEARN_RATE, 'nesterov', MOMENTUM, EXP_DECAY_STEP,
-    EXP_DECAY_RATE, 'staircase')
+    EXP_DECAY_RATE, 'staircase', EVEN_CUTOFF)
 
 CKPTS_SAVE = CKPTS_RESTORE + '/' + fname
 
@@ -108,18 +108,27 @@ def open_files(f):
     return im
 
 
+def start_daemon_thread(target, args):
+    thread = threading.Thread(target=target, args=args)
+    thread.daemon = True
+    thread.start()
+
 class Batcher(object):
+    """
+    Handles minibatching.
+    Spins off threads that preload batches in arrays, which are then retrieved
+    by training loop.
+    """
 
     def __init__(self, data_fp, label_fp, validation=False):
 
         # Set initial vars.
         self.index = 0
-        self.next_batch_flag = False
-        self.next_batch_data = None
-        self.next_batch_arrays = None
-        self.next_val_flag = False
-        self.next_val_data = None
-        self.next_val_arrays = None
+        self.even_batch = True
+        self.next_batch_data = []
+        self.next_batch_arrays = []
+        self.next_val_data = []
+        self.next_val_arrays = []
 
         # Get initial data.
         files = [os.path.join(data_fp, f) for f in os.listdir(data_fp)]
@@ -132,6 +141,7 @@ class Batcher(object):
 
         # Get onehots.
         onehots = np.eye(NUM_LABELS, dtype=int)
+
         def to_onehot(i):
             return onehots[i]
 
@@ -143,22 +153,37 @@ class Batcher(object):
             self.val_data = self.data.iloc[-val_slice:]
             self.data = self.data.iloc[:-val_slice]
             print 'Getting validation arrays'
-            thread = threading.Thread(target=self._get_val_batch, args=(VAL_BATCH_SIZE,))
-            thread.daemon = True
-            thread.start()
-        thread = threading.Thread(target=self._get_batch, args=(BATCH_SIZE,))
-        thread.daemon = True
-        thread.start()
+            for _ in range(2):
+                start_daemon_thread(self._get_val_batch, (VAL_BATCH_SIZE,))
+
+        for _ in range(2):
+            start_daemon_thread(self._get_batch, args=(BATCH_SIZE,))
 
     def _get_val_batch(self, size):
-        indices = np.random.choice(len(self.val_data), size, replace=False)
-        batch_data = self.val_data.iloc[indices]
+        """Preloads two validation minibatches."""
+        while True:
+            if len(self.next_val_data) >= 2 and len(self.next_val_arrays) >= 2:
+                continue
+            indices = np.random.choice(len(self.val_data), size, replace=False)
+            batch_data = self.val_data.iloc[indices]
+            batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
+
+            self.next_val_data.append(batch_data)
+            self.next_val_arrays.append(batch_arrays/255.0)
+
+    def _get_distribution_batch(self, size):
+        """Samples a minibatch according to the true distribution."""
+        batch_data = self.data.iloc[self.index:self.index + size]
+        self.index += size
+
+        if self.index > len(self.data):
+            self.index = 0
+
         batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
-        self.next_val_data = batch_data
-        self.next_val_arrays = batch_arrays/255.0
-        self.next_val_flag = True
+        return batch_data, batch_arrays/255.0
 
     def _get_even_batch(self, size):
+        """Samples a minibatch evenly across classes."""
         batch_data = pandas.DataFrame()
         for i in range(NUM_LABELS):
             label_data = self.data.loc[self.data['level'] == i].sample(size/NUM_LABELS)
@@ -171,43 +196,30 @@ class Batcher(object):
             batch_data = batch_data.append(label_data)
 
         batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
-        self.next_batch_data = batch_data
-        self.next_batch_arrays = batch_arrays/255.0
-        self.next_batch_flag = True
+        return batch_data, batch_arrays/255.0
 
     def _get_batch(self, size):
-        batch_data = self.data.iloc[self.index:self.index + size]
-        self.index += size
+        """Preloads five train minibatches."""
+        while True:
+            if (len(self.next_batch_data) >= 5 and
+                len(self.next_batch_arrays) >= 5):
+                continue
+            if self.even_batch:
+                data, arrays = self._get_even_batch(size)
+            else:
+                data, arrays = self._get_distribution_batch(size)
+            self.next_batch_data.append(data)
+            self.next_batch_arrays.append(arrays)
 
-        if self.index > len(self.data):
-            self.index = 0
+    def get_batch(self):
+        while not (len(self.next_batch_data) and len(self.next_batch_arrays)):
+            pass
+        return self.next_batch_data.pop(0), self.next_batch_arrays.pop(0)
 
-        batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
-        self.next_batch_data = batch_data
-        self.next_batch_arrays = batch_arrays/255.0
-        self.next_batch_flag = True
-
-    def get_batch(self, size, even_sample=True):
-        while not self.next_batch_flag: pass
-        next_batch = self.next_batch_data, self.next_batch_arrays
-        self.next_batch_flag = False
-
-        if even_sample:
-            thread = threading.Thread(target=self._get_even_batch, args=(size,))
-        else:
-            thread = threading.Thread(target=self._get_batch, args=(size,))
-        thread.daemon = True
-        thread.start()
-        return next_batch
-
-    def get_validation_batch(self, size):
-        while not self.next_val_flag: pass
-        next_batch = self.next_val_data, self.next_val_arrays
-        self.next_val_flag = False
-        thread = threading.Thread(target=self._get_val_batch, args=(size,))
-        thread.daemon = True
-        thread.start()
-        return next_batch
+    def get_validation_batch(self):
+        while not (len(self.next_val_data) and len(self.next_val_arrays)):
+            pass
+        return self.next_val_data.pop(0), self.next_val_arrays.pop(0)
 
 
 # Create network.
@@ -325,11 +337,13 @@ if RESTORE:
 IPython.embed()
 
 try:
-    for i in range(step, 50000):
+    for i in range(step, 100000):
+        if i > EVEN_CUTOFF:
+            batcher.even_batch = False
         if step % VALIDATION_EVERY_N == 0 and step > 1:
             print 'Validation'
             model.saver.save(sess, CKPTS_SAVE, global_step=sess.run(model.global_step))
-            batch_data, batch_arrays = batcher.get_validation_batch(VAL_BATCH_SIZE)
+            batch_data, batch_arrays = batcher.get_validation_batch()
             inputs = {model.x: batch_arrays}
             preds = sess.run(model.preds, inputs)
             accs = get_accuracies(sess, preds, batch_data['level'].as_matrix())
@@ -340,9 +354,7 @@ try:
 
             writer.flush()
         else:
-
-            batch_data, batch_arrays = batcher.get_batch(BATCH_SIZE,
-                                                         i < EVEN_CUTOFF)
+            batch_data, batch_arrays = batcher.get_batch()
             print "Got batch"
             print batch_data['level'].values
             inputs = {
