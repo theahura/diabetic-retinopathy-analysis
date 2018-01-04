@@ -2,8 +2,7 @@
 Batcher, model, training.
 
 TODO:
-    - add input image + label to summaries
-    - try visualizing activations on a single image (of each class?)
+    - consider revisiting preprocessing
 """
 
 import os
@@ -22,18 +21,19 @@ import IPython
 rng = np.random.RandomState(128)
 
 # Globals, hyperparameters.
-SUMMARIES_EVERY_N = 5
-VALIDATION_EVERY_N = 20
+SUMMARIES_EVERY_N = 20
+VALIDATION_EVERY_N = 40
 BATCH_SIZE = 64
 VAL_BATCH_SIZE = 64
 
-EVEN_CUTOFF = 50000
+NUM_STEPS = 200000
+EVEN_CUTOFF = 100000
 
 MOMENTUM = 0.9
 
 L2_REG = 0.005
 LEARN_RATE = 0.001
-EXP_DECAY_STEP = 20000
+EXP_DECAY_STEP = 50000
 EXP_DECAY_RATE = 0.5
 
 
@@ -89,8 +89,8 @@ def open_files(f):
     im = cv2.warpAffine(im, rot_mat, (cols, rows))
 
     # Translation.
-    y_trans = random.randint(-rows/4, rows/4)
-    x_trans = random.randint(-cols/4, cols/4)
+    y_trans = random.randint(-rows/6, rows/6)
+    x_trans = random.randint(-cols/6, cols/6)
     trans_mat = np.float32([[1, 0, x_trans], [0, 1, y_trans]])
     im = cv2.warpAffine(im, trans_mat, (cols, rows))
 
@@ -103,7 +103,7 @@ def open_files(f):
     elif choice == 2:
         im = cv2.flip(im, -1)
 
-    im[np.where((im==[0, 0, 0]).all(axis=2))] = [128, 128, 128]
+    im[np.where((im == [0, 0, 0]).all(axis=2))] = [128, 128, 128]
 
     return im
 
@@ -153,10 +153,9 @@ class Batcher(object):
             self.val_data = self.data.iloc[-val_slice:]
             self.data = self.data.iloc[:-val_slice]
             print 'Getting validation arrays'
-            for _ in range(2):
-                start_daemon_thread(self._get_val_batch, (VAL_BATCH_SIZE,))
+            start_daemon_thread(self._get_val_batch, (VAL_BATCH_SIZE,))
 
-        for _ in range(2):
+        for _ in range(3):
             start_daemon_thread(self._get_batch, args=(BATCH_SIZE,))
 
     def _get_val_batch(self, size):
@@ -296,6 +295,7 @@ class Model(object):
 
         def reshape_filters(layer):
             return tf.expand_dims(tf.transpose(layer[0, :, :, :], [2, 0, 1]), -1)
+        _input = tf.summary.image('model/conv0', x[0:1])
         _conv1 = tf.summary.image('model/conv1', reshape_filters(self.conv1))
         _pool1 = tf.summary.image('model/pool1', reshape_filters(self.pool1))
         _pool2 = tf.summary.image('model/pool2', reshape_filters(self.pool2))
@@ -304,8 +304,9 @@ class Model(object):
         _pool5 = tf.summary.image('model/pool5', reshape_filters(self.pool5))
 
         self.summary_op = tf.summary.merge([_loss, _reg, _grad_norm, _var_norm,
-                                            _logits, _t_acc, _conv1, _pool1,
-                                            _pool2, _pool3, _pool4, _pool5])
+                                            _logits, _t_acc, _input, _conv1,
+                                            _pool1, _pool2, _pool3, _pool4,
+                                            _pool5])
 
         self.saver = tf.train.Saver()
 
@@ -316,7 +317,7 @@ model = Model()
 sess = tf.Session()
 
 # Summary writer, acc ops.
-writer = tf.summary.FileWriter(LOGDIR, sess.graph, flush_secs=60)
+writer = tf.summary.FileWriter(LOGDIR, sess.graph, flush_secs=30)
 
 _acc_plhlds = [tf.placeholder(tf.float32, name='acc_' + str(i)) for i in range(NUM_LABELS + 1)]
 _accs = [tf.summary.scalar('acc/' + str(i), _acc_plhlds[i]) for i in range(NUM_LABELS + 1)]
@@ -337,7 +338,7 @@ if RESTORE:
 IPython.embed()
 
 try:
-    for i in range(step, 100000):
+    for i in range(step, NUM_STEPS):
         if i > EVEN_CUTOFF:
             batcher.even_batch = False
         if step % VALIDATION_EVERY_N == 0 and step > 1:

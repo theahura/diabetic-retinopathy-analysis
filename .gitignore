@@ -1,5 +1,6 @@
 test
 train
+train_2
 *.csv
 *.swp
 logs
