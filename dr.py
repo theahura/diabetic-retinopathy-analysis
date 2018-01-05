@@ -3,6 +3,9 @@ Batcher, model, training.
 
 TODO:
     - consider revisiting preprocessing
+    - consider increasing learning rate
+
+    - add precision and recall
 """
 
 import os
@@ -19,6 +22,7 @@ import threading
 import IPython
 
 rng = np.random.RandomState(128)
+random.seed(a=128)
 
 # Globals, hyperparameters.
 SUMMARIES_EVERY_N = 20
@@ -26,28 +30,33 @@ VALIDATION_EVERY_N = 40
 BATCH_SIZE = 64
 VAL_BATCH_SIZE = 64
 
-NUM_STEPS = 200000
-EVEN_CUTOFF = 100000
+NUM_STEPS = 100000
+EVEN_CUTOFF = 90000
 
+LEAKY = 0.5
 MOMENTUM = 0.9
 
 L2_REG = 0.005
 LEARN_RATE = 0.001
-EXP_DECAY_STEP = 50000
+EXP_DECAY_STEP = 20000
 EXP_DECAY_RATE = 0.5
 
+GRAD_NORM = 1000
+
+TRANSLATE = False
+ROTATE = False
+FLIP = False
 
 RESTORE = True
-LAST_N_VAL = 10
 NUM_LABELS = 5
 LABELS_FP = './trainLabels.csv'
 DATA_FP = './train'
 LOGDIR = './logs/'
 CKPTS_RESTORE = './ckpts'
 
-fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_expdecay-%d-%f-%s_cutoff-%d' % (
+fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_expdecay-%d-%f-%s_cutoff-%d_leaky-%f' % (
     BATCH_SIZE, L2_REG, LEARN_RATE, 'nesterov', MOMENTUM, EXP_DECAY_STEP,
-    EXP_DECAY_RATE, 'staircase', EVEN_CUTOFF)
+    EXP_DECAY_RATE, 'staircase', EVEN_CUTOFF, LEAKY)
 
 CKPTS_SAVE = CKPTS_RESTORE + '/' + fname
 
@@ -84,24 +93,27 @@ def open_files(f):
     rows, cols, _ = im.shape
 
     # Rotation.
-    degrees = random.randint(0, 359)
-    rot_mat = cv2.getRotationMatrix2D((cols/2, rows/2), degrees, 1)
-    im = cv2.warpAffine(im, rot_mat, (cols, rows))
+    if ROTATE:
+        degrees = random.randint(0, 359)
+        rot_mat = cv2.getRotationMatrix2D((cols/2, rows/2), degrees, 1)
+        im = cv2.warpAffine(im, rot_mat, (cols, rows))
 
     # Translation.
-    y_trans = random.randint(-rows/6, rows/6)
-    x_trans = random.randint(-cols/6, cols/6)
-    trans_mat = np.float32([[1, 0, x_trans], [0, 1, y_trans]])
-    im = cv2.warpAffine(im, trans_mat, (cols, rows))
+    if TRANSLATE:
+        y_trans = random.randint(-rows/6, rows/6)
+        x_trans = random.randint(-cols/6, cols/6)
+        trans_mat = np.float32([[1, 0, x_trans], [0, 1, y_trans]])
+        im = cv2.warpAffine(im, trans_mat, (cols, rows))
 
     # Flip.
-    choice = random.randint(0, 3)
-    if choice == 0:
-        im = cv2.flip(im, 0)
-    elif choice == 1:
-        im = cv2.flip(im, 1)
-    elif choice == 2:
-        im = cv2.flip(im, -1)
+    if FLIP:
+        choice = random.randint(0, 3)
+        if choice == 0:
+            im = cv2.flip(im, 0)
+        elif choice == 1:
+            im = cv2.flip(im, 1)
+        elif choice == 2:
+            im = cv2.flip(im, -1)
 
     im[np.where((im == [0, 0, 0]).all(axis=2))] = [128, 128, 128]
 
@@ -133,7 +145,7 @@ class Batcher(object):
         # Get initial data.
         files = [os.path.join(data_fp, f) for f in os.listdir(data_fp)]
 
-        self.data = pandas.read_csv(label_fp).sample(frac=1)
+        self.data = pandas.read_csv(label_fp).sample(frac=1, random_state=rng)
 
         # Add filepath.
         files = sorted(files, key=lambda f: int(f.split('/')[-1].split('_')[0]))
@@ -185,13 +197,15 @@ class Batcher(object):
         """Samples a minibatch evenly across classes."""
         batch_data = pandas.DataFrame()
         for i in range(NUM_LABELS):
-            label_data = self.data.loc[self.data['level'] == i].sample(size/NUM_LABELS)
+            label_data = self.data.loc[
+                self.data['level'] == i].sample(size/NUM_LABELS, random_state=rng)
             batch_data = batch_data.append(label_data)
 
         if len(batch_data) < size:
             rem = size - len(batch_data)
             rem_class = random.randint(0, NUM_LABELS - 1)
-            label_data = self.data.loc[self.data['level'] == rem_class].sample(rem)
+            label_data = self.data.loc[
+                self.data['level'] == rem_class].sample(rem, random_stage=rng)
             batch_data = batch_data.append(label_data)
 
         batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
@@ -227,7 +241,7 @@ class Model(object):
     def __init__(self):
         self.x = x = tf.placeholder(tf.float32, shape=(None, 512, 512, 3), name='x')
         self.is_training = is_training = tf.placeholder_with_default(True, shape=())
-        tf.nn.leaky_relu.func_defaults = (0.3, None)
+        tf.nn.leaky_relu.func_defaults = (LEAKY, None)
         with slim.arg_scope([slim.conv2d, slim.fully_connected],
                             weights_regularizer=slim.l2_regularizer(L2_REG),
                             activation_fn=tf.nn.leaky_relu):
@@ -278,7 +292,7 @@ class Model(object):
         #op = tf.train.GradientDescentOptimizer(0.001)
         net_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         unclipped_grads = tf.gradients(self.total_loss, net_vars)
-        self.grads, _ = tf.clip_by_global_norm(unclipped_grads, 1000)
+        self.grads, _ = tf.clip_by_global_norm(unclipped_grads, GRAD_NORM)
         grads_and_vars = list(zip(self.grads, net_vars))
         self.train = op.apply_gradients(grads_and_vars,
                                         global_step=self.global_step)
