@@ -25,13 +25,13 @@ rng = np.random.RandomState(128)
 random.seed(a=128)
 
 # Globals, hyperparameters.
-SUMMARIES_EVERY_N = 20
-VALIDATION_EVERY_N = 40
+VALIDATION_EVERY_N = 50
 BATCH_SIZE = 64
+BATCHES_PER_CHUNK = 8
 VAL_BATCH_SIZE = 64
 
-NUM_STEPS = 100000
-EVEN_CUTOFF = 90000
+NUM_STEPS = 80000
+EVEN_CUTOFF = 60000
 
 LEAKY = 0.5
 MOMENTUM = 0.9
@@ -44,13 +44,13 @@ EXP_DECAY_RATE = 0.5
 GRAD_NORM = 1000
 
 TRANSLATE = False
-ROTATE = False
+ROTATE = True
 FLIP = False
 
 RESTORE = True
 NUM_LABELS = 5
 LABELS_FP = './trainLabels.csv'
-DATA_FP = './train'
+DATA_FP = './train_2'
 LOGDIR = './logs/'
 CKPTS_RESTORE = './ckpts'
 
@@ -205,7 +205,7 @@ class Batcher(object):
             rem = size - len(batch_data)
             rem_class = random.randint(0, NUM_LABELS - 1)
             label_data = self.data.loc[
-                self.data['level'] == rem_class].sample(rem, random_stage=rng)
+                self.data['level'] == rem_class].sample(rem, random_state=rng)
             batch_data = batch_data.append(label_data)
 
         batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
@@ -290,10 +290,18 @@ class Model(object):
         op = tf.train.MomentumOptimizer(learning_rate, MOMENTUM, use_nesterov=True)
         #op = tf.train.AdamOptimizer(LEARN_RATE)
         #op = tf.train.GradientDescentOptimizer(0.001)
-        net_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-        unclipped_grads = tf.gradients(self.total_loss, net_vars)
+        tvs = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+
+        accum_vars = [tf.Variable(tf.zeros_like(tv.initialized_value()),
+                                  trainable=False) for tv in tvs]
+        self.zero_ops = [av.assign(tf.zeros_like(av)) for av in accum_vars]
+
+        unclipped_grads = tf.gradients(self.total_loss, tvs)
         self.grads, _ = tf.clip_by_global_norm(unclipped_grads, GRAD_NORM)
-        grads_and_vars = list(zip(self.grads, net_vars))
+        self.accum_ops = [accum_vars[i].assign_add(gv)
+                          for i, gv in enumerate(self.grads)]
+
+        grads_and_vars = list(zip(accum_vars, tvs))
         self.train = op.apply_gradients(grads_and_vars,
                                         global_step=self.global_step)
 
@@ -301,15 +309,15 @@ class Model(object):
         _loss = tf.summary.scalar('model/tot_loss', tf.reduce_mean(self.total_loss))
         _reg = tf.summary.scalar('model/reg_losses', tf.reduce_mean(self.norm_loss))
         _grad_norm = tf.summary.scalar('model/grad_norm', tf.global_norm(self.grads))
-        _var_norm = tf.summary.scalar('model/var_norm', tf.global_norm(net_vars))
+        _var_norm = tf.summary.scalar('model/var_norm', tf.global_norm(tvs))
         _logits = tf.summary.histogram('model/preds', self.preds)
         levels = tf.argmax(self.labels, 1)
         _t_acc = tf.summary.scalar(
             'acc/train_acc', tf.contrib.metrics.accuracy(self.preds, levels))
 
         def reshape_filters(layer):
-            return tf.expand_dims(tf.transpose(layer[0, :, :, :], [2, 0, 1]), -1)
-        _input = tf.summary.image('model/conv0', x[0:1])
+            return tf.expand_dims(tf.transpose(layer[-1, :, :, :], [2, 0, 1]), -1)
+        _input = tf.summary.image('model/conv0', x[-1:])
         _conv1 = tf.summary.image('model/conv1', reshape_filters(self.conv1))
         _pool1 = tf.summary.image('model/pool1', reshape_filters(self.pool1))
         _pool2 = tf.summary.image('model/pool2', reshape_filters(self.pool2))
@@ -340,12 +348,14 @@ _acc_sums = tf.summary.merge(_accs)
 # Training.
 step = 0
 sess.run(tf.global_variables_initializer())
+sess.run(model.zero_ops)
+
 if RESTORE:
     print 'RESTORING'
     ckpt = tf.train.get_checkpoint_state(CKPTS_RESTORE)
     if ckpt and tf.train.checkpoint_exists(ckpt.model_checkpoint_path):
         model.saver.restore(sess, ckpt.model_checkpoint_path)
-        step = sess.run(model.global_step)
+        step = sess.run(model.global_step)*BATCHES_PER_CHUNK
     else:
         print 'restore failed'
 
@@ -353,8 +363,10 @@ IPython.embed()
 
 try:
     for i in range(step, NUM_STEPS):
+
         if i > EVEN_CUTOFF:
             batcher.even_batch = False
+
         if step % VALIDATION_EVERY_N == 0 and step > 1:
             print 'Validation'
             model.saver.save(sess, CKPTS_SAVE, global_step=sess.run(model.global_step))
@@ -368,27 +380,28 @@ try:
                                sess.run(model.global_step))
 
             writer.flush()
-        else:
-            batch_data, batch_arrays = batcher.get_batch()
-            print "Got batch"
-            print batch_data['level'].values
-            inputs = {
-                model.x: batch_arrays,
-                model.labels: np.stack(batch_data['labels'].values)
-            }
 
-            if step % SUMMARIES_EVERY_N == 0 and step > 1:
-                print 'Summary'
-                fetched = sess.run([model.train, model.summary_op], inputs)
-                writer.add_summary(tf.Summary.FromString(fetched[1]),
-                                   sess.run(model.global_step))
-                writer.flush()
-            else:
-                print 'Training'
-                fetched = sess.run([model.train, model.total_loss, model.preds], inputs)
-                print 'Loss: %f' % fetched[1]
-                print 'Predictions:'
-                print fetched[2]
+        batch_data, batch_arrays = batcher.get_batch()
+        print "Got batch"
+        print batch_data['level'].values
+        inputs = {
+            model.x: batch_arrays,
+            model.labels: np.stack(batch_data['labels'].values)
+        }
+
+        if step % BATCHES_PER_CHUNK == 0 and step > 1:
+            print 'Update and Summary'
+            fetched = sess.run([model.train, model.summary_op], inputs)
+            writer.add_summary(tf.Summary.FromString(fetched[1]),
+                               sess.run(model.global_step))
+            writer.flush()
+            sess.run(model.zero_ops)
+
+        print 'Training'
+        fetched = sess.run([model.accum_ops, model.total_loss, model.preds], inputs)
+        print 'Loss: %f' % fetched[1]
+        print 'Predictions:'
+        print fetched[2]
 
         step += 1
         print step

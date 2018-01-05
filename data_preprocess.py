@@ -62,6 +62,10 @@ for i, f in enumerate(glob.glob(fp)):
             )
         )
 
+    # Handle rounding issues.
+    max_side = max(crop.size)
+    crop = crop.resize((max_side, max_side), Image.ANTIALIAS)
+
     # Resize.
     crop.thumbnail(size, Image.ANTIALIAS)
 
