@@ -2,10 +2,8 @@
 Batcher, model, training.
 
 TODO:
-    - consider revisiting preprocessing
-    - consider increasing learning rate
-
     - add precision and recall
+    - fix randomness in batching to avoid random oversampling
 """
 
 import os
@@ -25,21 +23,22 @@ rng = np.random.RandomState(128)
 random.seed(a=128)
 
 # Globals, hyperparameters.
-VALIDATION_EVERY_N = 50
+SUMMARIES_EVERY_N = 20
+VALIDATION_EVERY_N = 40
 BATCH_SIZE = 64
-BATCHES_PER_CHUNK = 8
 VAL_BATCH_SIZE = 64
 
 NUM_STEPS = 80000
-EVEN_CUTOFF = 60000
+EVEN_CUTOFF = NUM_STEPS/100 * 60
 
 LEAKY = 0.5
 MOMENTUM = 0.9
 
 L2_REG = 0.005
-LEARN_RATE = 0.001
-EXP_DECAY_STEP = 20000
-EXP_DECAY_RATE = 0.5
+
+LR_SCALE = 6.00
+BOUNDARIES = [NUM_STEPS / 100 * i for i in [30, 50, 85, 95]]
+VALUES = [i * LR_SCALE for i in [0.001, 0.0005, 0.0001, 0.00001, 0.000001]]
 
 GRAD_NORM = 1000
 
@@ -54,9 +53,8 @@ DATA_FP = './train_2'
 LOGDIR = './logs/'
 CKPTS_RESTORE = './ckpts'
 
-fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_expdecay-%d-%f-%s_cutoff-%d_leaky-%f' % (
-    BATCH_SIZE, L2_REG, LEARN_RATE, 'nesterov', MOMENTUM, EXP_DECAY_STEP,
-    EXP_DECAY_RATE, 'staircase', EVEN_CUTOFF, LEAKY)
+fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f' % (
+    BATCH_SIZE, L2_REG, LR_SCALE, 'nesterov', MOMENTUM, EVEN_CUTOFF, LEAKY)
 
 CKPTS_SAVE = CKPTS_RESTORE + '/' + fname
 
@@ -247,30 +245,24 @@ class Model(object):
                             activation_fn=tf.nn.leaky_relu):
             # Block one.
             self.conv1 = net = slim.conv2d(x, num_outputs=32, kernel_size=[7, 7], stride=2)
-            net = slim.batch_norm(net, is_training=is_training)
-            self.pool1 = net = slim.max_pool2d(net, kernel_size=[2, 2], stride=2)
+            self.pool1 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
             # Block two.
             net = slim.repeat(net, 2, slim.conv2d, 32, [3, 3])
-            net = slim.batch_norm(net, is_training=is_training)
-            self.pool2 = net = slim.max_pool2d(net, kernel_size=[2, 2], stride=2)
+            self.pool2 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
             # Block three.
             net = slim.repeat(net, 2, slim.conv2d, 64, [3, 3])
-            net = slim.batch_norm(net, is_training=is_training)
-            self.pool3 = net = slim.max_pool2d(net, kernel_size=[2, 2], stride=2)
+            self.pool3 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
             # Block four.
             net = slim.repeat(net, 4, slim.conv2d, 128, [3, 3])
-            net = slim.batch_norm(net, is_training=is_training)
-            self.pool4 = net = slim.max_pool2d(net, kernel_size=[2, 2], stride=2)
+            self.pool4 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
             # Block five.
             net = slim.repeat(net, 4, slim.conv2d, 256, [3, 3])
-            net = slim.batch_norm(net, is_training=is_training)
-            self.pool5 = net = slim.max_pool2d(net, kernel_size=[2, 2], stride=2)
+            self.pool5 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
 
             # Dense layers.
             net = slim.flatten(net)
-            self.fc1 = net = slim.fully_connected(net, 1024)
             net = slim.dropout(net, 0.5, is_training=is_training)
-            self.fc2 = net = slim.fully_connected(net, 1024)
+            self.fc1 = net = slim.fully_connected(net, 1024)
             net = slim.dropout(net, 0.5, is_training=is_training)
             self.logits = slim.fully_connected(net, NUM_LABELS)
             self.preds = tf.cast(tf.argmax(self.logits, 1), tf.int64)
@@ -284,24 +276,15 @@ class Model(object):
 
         # Optimizer.
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
-        learning_rate = tf.train.exponential_decay(LEARN_RATE, self.global_step,
-                                                   EXP_DECAY_STEP, EXP_DECAY_RATE,
-                                                   staircase=True)
+        learning_rate = tf.train.piecewise_constant(self.global_step,
+                                                    BOUNDARIES, VALUES)
         op = tf.train.MomentumOptimizer(learning_rate, MOMENTUM, use_nesterov=True)
         #op = tf.train.AdamOptimizer(LEARN_RATE)
         #op = tf.train.GradientDescentOptimizer(0.001)
-        tvs = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-
-        accum_vars = [tf.Variable(tf.zeros_like(tv.initialized_value()),
-                                  trainable=False) for tv in tvs]
-        self.zero_ops = [av.assign(tf.zeros_like(av)) for av in accum_vars]
-
-        unclipped_grads = tf.gradients(self.total_loss, tvs)
+        net_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+        unclipped_grads = tf.gradients(self.total_loss, net_vars)
         self.grads, _ = tf.clip_by_global_norm(unclipped_grads, GRAD_NORM)
-        self.accum_ops = [accum_vars[i].assign_add(gv)
-                          for i, gv in enumerate(self.grads)]
-
-        grads_and_vars = list(zip(accum_vars, tvs))
+        grads_and_vars = list(zip(self.grads, net_vars))
         self.train = op.apply_gradients(grads_and_vars,
                                         global_step=self.global_step)
 
@@ -309,7 +292,7 @@ class Model(object):
         _loss = tf.summary.scalar('model/tot_loss', tf.reduce_mean(self.total_loss))
         _reg = tf.summary.scalar('model/reg_losses', tf.reduce_mean(self.norm_loss))
         _grad_norm = tf.summary.scalar('model/grad_norm', tf.global_norm(self.grads))
-        _var_norm = tf.summary.scalar('model/var_norm', tf.global_norm(tvs))
+        _var_norm = tf.summary.scalar('model/var_norm', tf.global_norm(net_vars))
         _logits = tf.summary.histogram('model/preds', self.preds)
         levels = tf.argmax(self.labels, 1)
         _t_acc = tf.summary.scalar(
@@ -348,14 +331,12 @@ _acc_sums = tf.summary.merge(_accs)
 # Training.
 step = 0
 sess.run(tf.global_variables_initializer())
-sess.run(model.zero_ops)
-
 if RESTORE:
     print 'RESTORING'
     ckpt = tf.train.get_checkpoint_state(CKPTS_RESTORE)
     if ckpt and tf.train.checkpoint_exists(ckpt.model_checkpoint_path):
         model.saver.restore(sess, ckpt.model_checkpoint_path)
-        step = sess.run(model.global_step)*BATCHES_PER_CHUNK
+        step = sess.run(model.global_step)
     else:
         print 'restore failed'
 
@@ -363,10 +344,8 @@ IPython.embed()
 
 try:
     for i in range(step, NUM_STEPS):
-
         if i > EVEN_CUTOFF:
             batcher.even_batch = False
-
         if step % VALIDATION_EVERY_N == 0 and step > 1:
             print 'Validation'
             model.saver.save(sess, CKPTS_SAVE, global_step=sess.run(model.global_step))
@@ -380,28 +359,27 @@ try:
                                sess.run(model.global_step))
 
             writer.flush()
+        else:
+            batch_data, batch_arrays = batcher.get_batch()
+            print "Got batch"
+            print batch_data['level'].values
+            inputs = {
+                model.x: batch_arrays,
+                model.labels: np.stack(batch_data['labels'].values)
+            }
 
-        batch_data, batch_arrays = batcher.get_batch()
-        print "Got batch"
-        print batch_data['level'].values
-        inputs = {
-            model.x: batch_arrays,
-            model.labels: np.stack(batch_data['labels'].values)
-        }
-
-        if step % BATCHES_PER_CHUNK == 0 and step > 1:
-            print 'Update and Summary'
-            fetched = sess.run([model.train, model.summary_op], inputs)
-            writer.add_summary(tf.Summary.FromString(fetched[1]),
-                               sess.run(model.global_step))
-            writer.flush()
-            sess.run(model.zero_ops)
-
-        print 'Training'
-        fetched = sess.run([model.accum_ops, model.total_loss, model.preds], inputs)
-        print 'Loss: %f' % fetched[1]
-        print 'Predictions:'
-        print fetched[2]
+            if step % SUMMARIES_EVERY_N == 0 and step > 1:
+                print 'Summary'
+                fetched = sess.run([model.train, model.summary_op], inputs)
+                writer.add_summary(tf.Summary.FromString(fetched[1]),
+                                   sess.run(model.global_step))
+                writer.flush()
+            else:
+                print 'Training'
+                fetched = sess.run([model.train, model.total_loss, model.preds], inputs)
+                print 'Loss: %f' % fetched[1]
+                print 'Predictions:'
+                print fetched[2]
 
         step += 1
         print step
