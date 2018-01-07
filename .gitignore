@@ -6,3 +6,5 @@ train_2
 logs
 ckpts
 *pyc
+model
+images
