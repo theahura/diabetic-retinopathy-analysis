@@ -4,6 +4,10 @@ Batcher, model, training.
 TODO:
     - add precision and recall
     - fix randomness in batching to avoid random oversampling
+    - play with dense layers
+    - normalize (sub mean, divide std div) per batch/across dataset
+    - consider removing grad norm summary
+    - ensure create_train_op is used correctly
 """
 
 import os
@@ -12,7 +16,7 @@ import random
 import cv2
 import numpy as np
 import pandas
-from PIL import Image
+from PIL import Image, ImageChops, ImageOps, ImageEnhance
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import threading
@@ -21,37 +25,37 @@ import IPython
 
 rng = np.random.RandomState(128)
 random.seed(a=128)
+tf.set_random_seed(128)
 
 # Globals, hyperparameters.
-SUMMARIES_EVERY_N = 20
-VALIDATION_EVERY_N = 40
-BATCH_SIZE = 64
-VAL_BATCH_SIZE = 64
-
 NUM_STEPS = 80000
 EVEN_CUTOFF = NUM_STEPS/100 * 60
+SUMMARIES_EVERY_N = 20
+VALIDATION_EVERY_N = 40
 
+L2_REG = 0.0005
 LEAKY = 0.5
 MOMENTUM = 0.9
-
-L2_REG = 0.005
-
+GRAD_NORM = 1000
 LR_SCALE = 6.00
 BOUNDARIES = [NUM_STEPS / 100 * i for i in [30, 50, 85, 95]]
 VALUES = [i * LR_SCALE for i in [0.001, 0.0005, 0.0001, 0.00001, 0.000001]]
 
-GRAD_NORM = 1000
-
+NUM_BATCH_THREADS = 5
+LOADED_BATCH = 7
+BATCH_SIZE = 64
+VAL_BATCH_SIZE = 64
 TRANSLATE = False
 ROTATE = True
-FLIP = False
+FLIP = True
+
+LABELS_FP = './trainLabels.csv'
+DATA_FP = './train_2'
+CKPTS_RESTORE = './ckpts'
+LOGDIR = './logs/'
 
 RESTORE = True
 NUM_LABELS = 5
-LABELS_FP = './trainLabels.csv'
-DATA_FP = './train_2'
-LOGDIR = './logs/'
-CKPTS_RESTORE = './ckpts'
 
 fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f' % (
     BATCH_SIZE, L2_REG, LR_SCALE, 'nesterov', MOMENTUM, EVEN_CUTOFF, LEAKY)
@@ -86,35 +90,36 @@ def get_accuracy_summaries(session, accs, op, plhlds):
 
 
 def open_files(f):
-    im = cv2.imread(f)
+    im = Image.open(f)
 
-    rows, cols, _ = im.shape
+    rows, cols = im.size
+
+    # contrast = np.random.uniform(0.7, 1.3)
+    # brightness = np.random.uniform(0.7, 1.3)
+    # color = np.random.uniform(0.7, 1.3)
+    # im = ImageEnhance.Contrast(im).enhance(contrast)
+    # im = ImageEnhance.Brightness(im).enhance(brightness)
+    # im = ImageEnhance.Color(im).enhance(color)
 
     # Rotation.
     if ROTATE:
-        degrees = random.randint(0, 359)
-        rot_mat = cv2.getRotationMatrix2D((cols/2, rows/2), degrees, 1)
-        im = cv2.warpAffine(im, rot_mat, (cols, rows))
+        im = im.rotate(random.randint(0, 359))
 
     # Translation.
     if TRANSLATE:
         y_trans = random.randint(-rows/6, rows/6)
         x_trans = random.randint(-cols/6, cols/6)
-        trans_mat = np.float32([[1, 0, x_trans], [0, 1, y_trans]])
-        im = cv2.warpAffine(im, trans_mat, (cols, rows))
+        im = ImageChops.offset(im, x_trans, y_trans)
 
     # Flip.
     if FLIP:
-        choice = random.randint(0, 3)
+        choice = random.randint(0, 1)
         if choice == 0:
-            im = cv2.flip(im, 0)
-        elif choice == 1:
-            im = cv2.flip(im, 1)
-        elif choice == 2:
-            im = cv2.flip(im, -1)
+            im = ImageOps.flip(im)
 
+    im = np.asarray(im, dtype=np.uint8)
+    im.setflags(write=1)
     im[np.where((im == [0, 0, 0]).all(axis=2))] = [128, 128, 128]
-
     return im
 
 
@@ -122,6 +127,7 @@ def start_daemon_thread(target, args):
     thread = threading.Thread(target=target, args=args)
     thread.daemon = True
     thread.start()
+
 
 class Batcher(object):
     """
@@ -165,7 +171,7 @@ class Batcher(object):
             print 'Getting validation arrays'
             start_daemon_thread(self._get_val_batch, (VAL_BATCH_SIZE,))
 
-        for _ in range(3):
+        for _ in range(NUM_BATCH_THREADS):
             start_daemon_thread(self._get_batch, args=(BATCH_SIZE,))
 
     def _get_val_batch(self, size):
@@ -212,8 +218,8 @@ class Batcher(object):
     def _get_batch(self, size):
         """Preloads five train minibatches."""
         while True:
-            if (len(self.next_batch_data) >= 5 and
-                len(self.next_batch_arrays) >= 5):
+            if (len(self.next_batch_data) >= LOADED_BATCH and
+                len(self.next_batch_arrays) >= LOADED_BATCH):
                 continue
             if self.even_batch:
                 data, arrays = self._get_even_batch(size)
@@ -242,25 +248,31 @@ class Model(object):
         tf.nn.leaky_relu.func_defaults = (LEAKY, None)
         with slim.arg_scope([slim.conv2d, slim.fully_connected],
                             weights_regularizer=slim.l2_regularizer(L2_REG),
-                            activation_fn=tf.nn.leaky_relu):
+                            activation_fn=tf.nn.leaky_relu,
+                            normalizer_fn=slim.batch_norm,
+                            normalizer_params={'is_training': self.is_training}):
             # Block one.
-            self.conv1 = net = slim.conv2d(x, num_outputs=32, kernel_size=[7, 7], stride=2)
-            self.pool1 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            self.conv1 = net = slim.conv2d(x, num_outputs=32, kernel_size=7,
+                                           stride=2)
+            net = slim.batch_norm(net, is_training=is_training)
+            self.pool1 = net = slim.max_pool2d(net, kernel_size=3)
             # Block two.
-            net = slim.repeat(net, 2, slim.conv2d, 32, [3, 3])
-            self.pool2 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            net = slim.repeat(net, 2, slim.conv2d, 32, 3)
+            self.pool2 = net = slim.max_pool2d(net, kernel_size=3)
             # Block three.
-            net = slim.repeat(net, 2, slim.conv2d, 64, [3, 3])
-            self.pool3 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            net = slim.repeat(net, 2, slim.conv2d, 64, 3)
+            self.pool3 = net = slim.max_pool2d(net, kernel_size=3)
             # Block four.
-            net = slim.repeat(net, 4, slim.conv2d, 128, [3, 3])
-            self.pool4 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            net = slim.repeat(net, 4, slim.conv2d, 128, 3)
+            self.pool4 = net = slim.max_pool2d(net, kernel_size=3)
             # Block five.
-            net = slim.repeat(net, 4, slim.conv2d, 256, [3, 3])
-            self.pool5 = net = slim.max_pool2d(net, kernel_size=[3, 3], stride=2)
+            net = slim.repeat(net, 4, slim.conv2d, 256, 3)
+            self.pool5 = net = slim.max_pool2d(net, kernel_size=3)
 
             # Dense layers.
-            net = slim.flatten(net)
+            self.flattened = net = slim.flatten(net)
+            net = slim.dropout(net, 0.5, is_training=is_training)
+            self.fc1 = net = slim.fully_connected(net, 1024)
             net = slim.dropout(net, 0.5, is_training=is_training)
             self.fc1 = net = slim.fully_connected(net, 1024)
             net = slim.dropout(net, 0.5, is_training=is_training)
@@ -281,37 +293,50 @@ class Model(object):
         op = tf.train.MomentumOptimizer(learning_rate, MOMENTUM, use_nesterov=True)
         #op = tf.train.AdamOptimizer(LEARN_RATE)
         #op = tf.train.GradientDescentOptimizer(0.001)
-        net_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-        unclipped_grads = tf.gradients(self.total_loss, net_vars)
-        self.grads, _ = tf.clip_by_global_norm(unclipped_grads, GRAD_NORM)
-        grads_and_vars = list(zip(self.grads, net_vars))
-        self.train = op.apply_gradients(grads_and_vars,
-                                        global_step=self.global_step)
+
+        self.train = slim.learning.create_train_op(self.total_loss, op,
+                                                   clip_gradient_norm=GRAD_NORM)
 
         # Model Summaries.
         _loss = tf.summary.scalar('model/tot_loss', tf.reduce_mean(self.total_loss))
         _reg = tf.summary.scalar('model/reg_losses', tf.reduce_mean(self.norm_loss))
-        _grad_norm = tf.summary.scalar('model/grad_norm', tf.global_norm(self.grads))
-        _var_norm = tf.summary.scalar('model/var_norm', tf.global_norm(net_vars))
+        tvs = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+        grads = tf.gradients(self.total_loss, tvs)
+        _grad_norm = tf.summary.scalar('model/grad_norm', tf.global_norm(grads))
+        _var_norm = tf.summary.scalar('model/var_norm', tf.global_norm(tvs))
         _logits = tf.summary.histogram('model/preds', self.preds)
         levels = tf.argmax(self.labels, 1)
         _t_acc = tf.summary.scalar(
             'acc/train_acc', tf.contrib.metrics.accuracy(self.preds, levels))
 
-        def reshape_filters(layer):
-            return tf.expand_dims(tf.transpose(layer[-1, :, :, :], [2, 0, 1]), -1)
-        _input = tf.summary.image('model/conv0', x[-1:])
-        _conv1 = tf.summary.image('model/conv1', reshape_filters(self.conv1))
-        _pool1 = tf.summary.image('model/pool1', reshape_filters(self.pool1))
-        _pool2 = tf.summary.image('model/pool2', reshape_filters(self.pool2))
-        _pool3 = tf.summary.image('model/pool3', reshape_filters(self.pool3))
-        _pool4 = tf.summary.image('model/pool4', reshape_filters(self.pool4))
-        _pool5 = tf.summary.image('model/pool5', reshape_filters(self.pool5))
+        def reshape_filters(layer, label=0):
+            label_index = label * (BATCH_SIZE / NUM_LABELS)
+            return tf.expand_dims(tf.transpose(layer[label_index, :, :, :],
+                                               [2, 0, 1]), -1)
+        _input_0 = tf.summary.image('conv0/input0', x[0:1])
+        _conv1_0 = tf.summary.image('conv1/label0', reshape_filters(self.conv1))
+        _pool1_0 = tf.summary.image('pool1/label0', reshape_filters(self.pool1))
+        _pool2_0 = tf.summary.image('pool2/label0', reshape_filters(self.pool2))
+        _pool3_0 = tf.summary.image('pool3/label0', reshape_filters(self.pool3))
+        _pool4_0 = tf.summary.image('pool4/label0', reshape_filters(self.pool4))
+        _pool5_0 = tf.summary.image('pool5/label0', reshape_filters(self.pool5))
+        _input_4 = tf.summary.image('conv0/input4',
+                                    [x[4 * (BATCH_SIZE / NUM_LABELS)]])
+        _conv1_4 = tf.summary.image('conv1/label4', reshape_filters(self.conv1, 4))
+        _pool1_4 = tf.summary.image('pool1/label4', reshape_filters(self.pool1, 4))
+        _pool2_4 = tf.summary.image('pool2/label4', reshape_filters(self.pool2, 4))
+        _pool3_4 = tf.summary.image('pool3/label4', reshape_filters(self.pool3, 4))
+        _pool4_4 = tf.summary.image('pool4/label4', reshape_filters(self.pool4, 4))
+        _pool5_4 = tf.summary.image('pool5/label4', reshape_filters(self.pool5, 4))
 
-        self.summary_op = tf.summary.merge([_loss, _reg, _grad_norm, _var_norm,
-                                            _logits, _t_acc, _input, _conv1,
-                                            _pool1, _pool2, _pool3, _pool4,
-                                            _pool5])
+        self.summary_op = tf.summary.merge([_loss, _reg,
+                                            _grad_norm,
+                                            _var_norm,
+                                            _logits, _t_acc, _input_0, _conv1_0,
+                                            _pool1_0, _pool2_0, _pool3_0,
+                                            _pool4_0, _pool5_0, _input_4,
+                                            _conv1_4, _pool1_4, _pool2_4,
+                                            _pool3_4, _pool4_4, _pool5_4])
 
         self.saver = tf.train.Saver()
 
@@ -350,7 +375,7 @@ try:
             print 'Validation'
             model.saver.save(sess, CKPTS_SAVE, global_step=sess.run(model.global_step))
             batch_data, batch_arrays = batcher.get_validation_batch()
-            inputs = {model.x: batch_arrays}
+            inputs = {model.x: batch_arrays, model.is_training: False}
             preds = sess.run(model.preds, inputs)
             accs = get_accuracies(sess, preds, batch_data['level'].as_matrix())
             accuracy_sum = get_accuracy_summaries(sess, accs, _acc_sums, _acc_plhlds)
@@ -359,27 +384,27 @@ try:
                                sess.run(model.global_step))
 
             writer.flush()
-        else:
-            batch_data, batch_arrays = batcher.get_batch()
-            print "Got batch"
-            print batch_data['level'].values
-            inputs = {
-                model.x: batch_arrays,
-                model.labels: np.stack(batch_data['labels'].values)
-            }
 
-            if step % SUMMARIES_EVERY_N == 0 and step > 1:
-                print 'Summary'
-                fetched = sess.run([model.train, model.summary_op], inputs)
-                writer.add_summary(tf.Summary.FromString(fetched[1]),
-                                   sess.run(model.global_step))
-                writer.flush()
-            else:
-                print 'Training'
-                fetched = sess.run([model.train, model.total_loss, model.preds], inputs)
-                print 'Loss: %f' % fetched[1]
-                print 'Predictions:'
-                print fetched[2]
+        batch_data, batch_arrays = batcher.get_batch()
+        print "Got batch"
+        print batch_data['level'].values
+        inputs = {
+            model.x: batch_arrays,
+            model.labels: np.stack(batch_data['labels'].values)
+        }
+
+        if step % SUMMARIES_EVERY_N == 0 and step > 1:
+            print 'Summary'
+            fetched = sess.run([model.summary_op], inputs)
+            writer.add_summary(tf.Summary.FromString(fetched[0]),
+                               sess.run(model.global_step))
+            writer.flush()
+
+        print 'Training'
+        fetched = sess.run([model.train, model.total_loss, model.preds], inputs)
+        print 'Loss: %f' % fetched[1]
+        print 'Predictions:'
+        print fetched[2]
 
         step += 1
         print step

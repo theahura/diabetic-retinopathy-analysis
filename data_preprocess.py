@@ -17,7 +17,7 @@ from PIL import Image, ImageChops, ImageOps
 DO_TEST = False
 scale = 180
 
-fp = 'train_2/*.jpeg'
+fp = 'train/*.jpeg'
 
 size = 512, 512
 scale = 500
@@ -67,6 +67,7 @@ for i, f in enumerate(glob.glob(fp)):
     crop = crop.resize((max_side, max_side), Image.ANTIALIAS)
 
     # Resize.
+    crop = Image.open(f)
     crop.thumbnail(size, Image.ANTIALIAS)
 
     # Save.
