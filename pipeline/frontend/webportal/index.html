@@ -1,0 +1,32 @@
+<html>
+	<head>
+		<title>drCAM</title>
+		<link rel="stylesheet" href="{{ url_for('static', filename = 'node_modules/material-components-web/dist/material-components-web.css') }}">
+		<link rel="stylesheet" href="{{ url_for('static', filename = 'upload.css') }}">
+	</head>
+	<body>
+    <h2 class="mdc-typography--display2">Upload an Image</h2>
+    <div class="mdc-form-field">
+			<input type="file" class="mdc-button" accept="image/*" id="file-upload">
+    </div>
+
+		<div class="mdc-card preview-image">
+			<section class="mdc-card__primary">
+				<h1 class="mdc-card__title mdc-card__title--large">Image Preview</h1>
+				<h2 class="mdc-card__subtitle" id="prediction"> Predicted DR Severity: </h2>
+			</section>
+			<section class="mdc-card__media">
+				<img id="image-display" src="#" class="hidden"/>
+			</section>
+		</div>
+
+
+		<!--Libraries-->
+		<script type="text/javascript" src="{{ url_for('static', filename = 'node_modules/material-components-web/dist/material-components-web.js') }}"></script>
+		<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
+		<script>mdc.autoInit()</script>
+		<!--Code-->
+		<script type="text/javascript" src="{{ url_for('static', filename = 'upload.js') }}"></script>
+	</body>
+</html>
+

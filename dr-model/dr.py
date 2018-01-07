@@ -8,6 +8,7 @@ TODO:
     - normalize (sub mean, divide std div) per batch/across dataset
     - consider removing grad norm summary
     - ensure create_train_op is used correctly
+    - check memory errors
 """
 
 import os
@@ -250,7 +251,7 @@ class Model(object):
                             weights_regularizer=slim.l2_regularizer(L2_REG),
                             activation_fn=tf.nn.leaky_relu,
                             normalizer_fn=slim.batch_norm,
-                            normalizer_params={'is_training': self.is_training}):
+                            normalizer_params={'is_training': is_training}):
             # Block one.
             self.conv1 = net = slim.conv2d(x, num_outputs=32, kernel_size=7,
                                            stride=2)

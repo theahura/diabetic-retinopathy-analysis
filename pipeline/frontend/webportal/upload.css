@@ -1,0 +1,11 @@
+img {
+	align-self: center;
+}
+
+.hidden {
+	display: none;	
+}
+
+.preview-image {
+	margin-top: 50px;
+}
