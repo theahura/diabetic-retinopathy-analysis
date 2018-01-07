@@ -5,3 +5,4 @@ train_2
 *.swp
 logs
 ckpts
+*pyc
