@@ -5,6 +5,8 @@ import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import IPython
 
+import data_preprocess as dp
+
 # Globals, hyperparameters.
 FILEPATH = './model'
 
@@ -69,7 +71,7 @@ class Runner(object):
         print 'restored'
 
     def get_prediction(self, fp):
-        im = cv2.imread(fp)
+        im = dp.process_image(fp)
         return self.sess.run(self.model.preds, {self.model.x: [im]})[0]
 
 

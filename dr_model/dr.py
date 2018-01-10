@@ -142,10 +142,8 @@ class Batcher(object):
         # Set initial vars.
         self.index = 0
         self.even_batch = True
-        self.next_batch_data = []
-        self.next_batch_arrays = []
-        self.next_val_data = []
-        self.next_val_arrays = []
+        self.next_batch = []
+        self.next_val = []
 
         # Get initial data.
         files = [os.path.join(data_fp, f) for f in os.listdir(data_fp)]
@@ -178,22 +176,20 @@ class Batcher(object):
     def _get_val_batch(self, size):
         """Preloads two validation minibatches."""
         while True:
-            if len(self.next_val_data) >= 2 and len(self.next_val_arrays) >= 2:
+            if len(self.next_val) >= 2:
                 continue
             indices = np.random.choice(len(self.val_data), size, replace=False)
             batch_data = self.val_data.iloc[indices]
             batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
 
-            self.next_val_data.append(batch_data)
-            self.next_val_arrays.append(batch_arrays/255.0)
+            self.next_val.append((batch_data, batch_arrays/255.0))
 
     def _get_distribution_batch(self, size):
         """Samples a minibatch according to the true distribution."""
-        batch_data = self.data.iloc[self.index:self.index + size]
+        start = self.index % len(self.data)
+        end = (self.index + size) % len(self.data)
+        batch_data = self.data.iloc[start:end]
         self.index += size
-
-        if self.index > len(self.data):
-            self.index = 0
 
         batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
         return batch_data, batch_arrays/255.0
@@ -217,27 +213,25 @@ class Batcher(object):
         return batch_data, batch_arrays/255.0
 
     def _get_batch(self, size):
-        """Preloads five train minibatches."""
+        """Preloads LOADED_BATCH train minibatches."""
         while True:
-            if (len(self.next_batch_data) >= LOADED_BATCH and
-                len(self.next_batch_arrays) >= LOADED_BATCH):
+            if len(self.next_batch) >= LOADED_BATCH:
                 continue
             if self.even_batch:
                 data, arrays = self._get_even_batch(size)
             else:
                 data, arrays = self._get_distribution_batch(size)
-            self.next_batch_data.append(data)
-            self.next_batch_arrays.append(arrays)
+            self.next_batch.append((data, arrays))
 
     def get_batch(self):
-        while not (len(self.next_batch_data) and len(self.next_batch_arrays)):
+        while not len(self.next_batch):
             pass
-        return self.next_batch_data.pop(0), self.next_batch_arrays.pop(0)
+        return self.next_batch.pop(0)
 
     def get_validation_batch(self):
-        while not (len(self.next_val_data) and len(self.next_val_arrays)):
+        while not len(self.next_val):
             pass
-        return self.next_val_data.pop(0), self.next_val_arrays.pop(0)
+        return self.next_val.pop(0)
 
 
 # Create network.
@@ -255,7 +249,6 @@ class Model(object):
             # Block one.
             self.conv1 = net = slim.conv2d(x, num_outputs=32, kernel_size=7,
                                            stride=2)
-            net = slim.batch_norm(net, is_training=is_training)
             self.pool1 = net = slim.max_pool2d(net, kernel_size=3)
             # Block two.
             net = slim.repeat(net, 2, slim.conv2d, 32, 3)
@@ -402,7 +395,8 @@ try:
             writer.flush()
 
         print 'Training'
-        fetched = sess.run([model.train, model.total_loss, model.preds], inputs)
+        fetched = sess.run([model.train, model.total_loss, model.preds],
+                           inputs)
         print 'Loss: %f' % fetched[1]
         print 'Predictions:'
         print fetched[2]
