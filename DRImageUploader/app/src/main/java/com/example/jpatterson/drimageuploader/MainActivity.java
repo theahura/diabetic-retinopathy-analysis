@@ -4,13 +4,14 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.net.Uri;
+import android.os.Environment;
 import android.provider.MediaStore;
+import android.support.v4.content.FileProvider;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import com.android.volley.NetworkResponse;
@@ -25,15 +26,23 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.net.URI;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 
 public class MainActivity extends AppCompatActivity {
     private static final int RESULT_LOAD_IMAGE = 1;
-//    private static final int UPLOAD_IMAGE == 2;
+    private static final int REQUEST_IMAGE_CAPTURE = 2;
 
     ImageView imageToUpload;
     Button sendButton;
+    String mCurrentPhotoPath;
+    Uri imageUri;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -44,6 +53,11 @@ public class MainActivity extends AppCompatActivity {
 
     }
 
+//    @Override
+//    public void onSaveInstanceState(Bundle savedInstanceState) {
+//        savedInstanceState.putInt();
+//    }
+
 
     public void selectImage(View view) {
         Intent galleryIntent = new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
@@ -51,59 +65,47 @@ public class MainActivity extends AppCompatActivity {
 
     }
 
-//    public void uploadImage(View view) {
-//        RequestQueue queue = Volley.newRequestQueue(this);
-//        String url = getString(R.string.server_url);
-//
-//
-//        StringRequest stringRequest = new StringRequest(Request.Method.POST, url,
-//                new Response.Listener<String>() {
-//                    public void onResponse(String response) {
-//                        textView2.setText(response);
-//                    }
-//
-//                },
-//                new Response.ErrorListener() {
-//                    public void onErrorResponse(VolleyError error) {
-//                        textView2.setText(error.toString());
-//                    }
-//                }
-//        ) {
-//            @Override
-//            protected Map<String, String> getParams() {
-//                Map<String,String> params = new HashMap<String, String>();
-//
-//                Bitmap bitmap = ((BitmapDrawable ) imageToUpload.getDrawable()).getBitmap();
-//                ByteArrayOutputStream stream = new ByteArrayOutputStream();
-//                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, stream);
-//                byte[] imageInByte = stream.toByteArray();
-//                ByteArrayInputStream bis = new ByteArrayInputStream(imageInByte);
-//
-//                params.put("image", bis.toString());
-//
-//                return params;
-//            }
-//        };
-//
-//        queue.add(stringRequest);
-//
-//    }
+    private File createImageFile() throws IOException {
+        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        String imageFileName = "JPEG_" + timeStamp + "_";
+        File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+
+        File image = File.createTempFile(
+                imageFileName,
+                ".jpg",
+                storageDir
+        );
+
+        mCurrentPhotoPath = "file:" + image.getAbsolutePath();
+        return image;
+    }
+
+    public void takePicture(View view) {
+        Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        if (takePictureIntent.resolveActivity(getPackageManager()) != null) {
+            File photoFile = null;
+            try {
+                photoFile = createImageFile();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            if (photoFile != null) {
+                Uri photoURI = FileProvider.getUriForFile(this,
+                        "com.example.android.fileprovider",
+                        photoFile);
+                takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI);
+                startActivityForResult(takePictureIntent, REQUEST_IMAGE_CAPTURE);
+            }
+        }
+    }
+
+
 
     public void uploadImage(View view) {
         Bitmap bitmap = ((BitmapDrawable ) imageToUpload.getDrawable()).getBitmap();
         uploadBitmap(bitmap);
     }
 
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == RESULT_LOAD_IMAGE && resultCode == RESULT_OK && data != null) {
-            Uri selectedImage = data.getData();
-            imageToUpload.setImageURI(selectedImage);
-            sendButton.setVisibility(View.VISIBLE);
-        }
-    }
 
     /*
     * The method is taking Bitmap as an argument
@@ -162,11 +164,33 @@ public class MainActivity extends AppCompatActivity {
             protected Map<String, DataPart> getByteData() {
                 Map<String, DataPart> params = new HashMap<>();
                 long imagename = System.currentTimeMillis();
-                params.put("pic", new DataPart(imagename + ".jpg", getFileDataFromDrawable(bitmap)));
+                params.put("image", new DataPart(imagename + ".jpg", getFileDataFromDrawable(bitmap)));
                 return params;
             }
         };
 
         Volley.newRequestQueue(this).add(volleyMultipartRequest);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == RESULT_LOAD_IMAGE && resultCode == RESULT_OK && data != null) {
+            Uri selectedImage = data.getData();
+            imageToUpload.setImageURI(selectedImage);
+            sendButton.setVisibility(View.VISIBLE);
+        }
+        else if (requestCode == REQUEST_IMAGE_CAPTURE && resultCode == RESULT_OK) {
+            Bitmap bitmap = null;
+            try {
+                bitmap = MediaStore.Images.Media.getBitmap(this.getContentResolver(), Uri.parse(mCurrentPhotoPath));
+                imageToUpload.setImageBitmap(bitmap);
+                sendButton.setVisibility(View.VISIBLE);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+
+        }
     }
 }

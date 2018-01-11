@@ -2,4 +2,8 @@
     <string name="app_name">DRImageUploader</string>
     <string name="home_title">Upload Image</string>
     <string name="server_url">http://192.168.1.6:5000/upload</string>
+
+    <string name="title_activity_camera">CameraActivity</string>
+    <string name="dummy_button">Dummy Button</string>
+    <string name="dummy_content">DUMMY\nCONTENT</string>
 </resources>
