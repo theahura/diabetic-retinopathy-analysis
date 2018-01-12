@@ -3,18 +3,13 @@ Batcher, model, training.
 
 TODO:
     - add precision and recall
-    - fix randomness in batching to avoid random oversampling
-    - play with dense layers
     - normalize (sub mean, divide std div) per batch/across dataset
-    - consider removing grad norm summary
-    - ensure create_train_op is used correctly
-    - check memory errors
+    - try combining multiple eyes
 """
 
 import os
 import random
 
-import cv2
 import numpy as np
 import pandas
 from PIL import Image, ImageChops, ImageOps, ImageEnhance
@@ -31,14 +26,13 @@ tf.set_random_seed(128)
 # Globals, hyperparameters.
 NUM_STEPS = 80000
 EVEN_CUTOFF = NUM_STEPS/100 * 60
-SUMMARIES_EVERY_N = 20
-VALIDATION_EVERY_N = 40
+SUMMARIES_EVERY_N = 100
+VALIDATION_EVERY_N = 200
 
 L2_REG = 0.0005
 LEAKY = 0.5
 MOMENTUM = 0.9
-GRAD_NORM = 1000
-LR_SCALE = 6.00
+LR_SCALE = 5.00
 BOUNDARIES = [NUM_STEPS / 100 * i for i in [30, 50, 85, 95]]
 VALUES = [i * LR_SCALE for i in [0.001, 0.0005, 0.0001, 0.00001, 0.000001]]
 
@@ -47,8 +41,8 @@ LOADED_BATCH = 7
 BATCH_SIZE = 64
 VAL_BATCH_SIZE = 64
 TRANSLATE = False
-ROTATE = True
-FLIP = True
+ROTATE = False
+FLIP = False
 
 LABELS_FP = './trainLabels.csv'
 DATA_FP = './train_2'
@@ -58,8 +52,9 @@ LOGDIR = './logs/'
 RESTORE = True
 NUM_LABELS = 5
 
-fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f' % (
-    BATCH_SIZE, L2_REG, LR_SCALE, 'nesterov', MOMENTUM, EVEN_CUTOFF, LEAKY)
+fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f_loss-%s' % (
+    BATCH_SIZE, L2_REG, LR_SCALE, 'nesterov', MOMENTUM, EVEN_CUTOFF, LEAKY,
+    'MSE')
 
 CKPTS_SAVE = CKPTS_RESTORE + '/' + fname
 
@@ -140,7 +135,6 @@ class Batcher(object):
     def __init__(self, data_fp, label_fp, validation=False):
 
         # Set initial vars.
-        self.index = 0
         self.even_batch = True
         self.next_batch = []
         self.next_val = []
@@ -186,11 +180,7 @@ class Batcher(object):
 
     def _get_distribution_batch(self, size):
         """Samples a minibatch according to the true distribution."""
-        start = self.index % len(self.data)
-        end = (self.index + size) % len(self.data)
-        batch_data = self.data.iloc[start:end]
-        self.index += size
-
+        batch_data = self.data.sample(size, random_state=rng)
         batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
         return batch_data, batch_arrays/255.0
 
@@ -240,12 +230,16 @@ class Model(object):
     def __init__(self):
         self.x = x = tf.placeholder(tf.float32, shape=(None, 512, 512, 3), name='x')
         self.is_training = is_training = tf.placeholder_with_default(True, shape=())
-        tf.nn.leaky_relu.func_defaults = (LEAKY, None)
+
+        def leaky(x):
+            return tf.nn.leaky_relu(x, LEAKY)
+
         with slim.arg_scope([slim.conv2d, slim.fully_connected],
                             weights_regularizer=slim.l2_regularizer(L2_REG),
-                            activation_fn=tf.nn.leaky_relu,
-                            normalizer_fn=slim.batch_norm,
-                            normalizer_params={'is_training': is_training}):
+                            activation_fn=leaky,):
+                            #normalizer_fn=slim.batch_norm,
+                            #normalizer_params={'is_training': is_training},
+                            #biases_initializer=init_biases):
             # Block one.
             self.conv1 = net = slim.conv2d(x, num_outputs=32, kernel_size=7,
                                            stride=2)
@@ -266,15 +260,18 @@ class Model(object):
             # Dense layers.
             self.flattened = net = slim.flatten(net)
             net = slim.dropout(net, 0.5, is_training=is_training)
-            self.fc1 = net = slim.fully_connected(net, 1024)
+            self.fc1 = net = slim.fully_connected(net, 1024, activation_fn=None)
             net = slim.dropout(net, 0.5, is_training=is_training)
-            self.fc1 = net = slim.fully_connected(net, 1024)
+            self.fc2 = net = slim.fully_connected(net, 1024, activation_fn=None)
             net = slim.dropout(net, 0.5, is_training=is_training)
-            self.logits = slim.fully_connected(net, NUM_LABELS)
-            self.preds = tf.cast(tf.argmax(self.logits, 1), tf.int64)
+            self.logits = slim.fully_connected(net, NUM_LABELS, activation_fn=None)
+            sftmx = tf.nn.softmax(self.logits)
+            self.preds = tf.cast(tf.argmax(sftmx, 1), tf.int64)
 
         # Losses.
-        self.labels = tf.placeholder(tf.int32, name='labels')
+        self.labels = tf.placeholder(tf.int64, name='labels')
+        self.levels = tf.placeholder(tf.int64, name='levels')
+        self.mse_loss = tf.losses.mean_squared_error(self.labels, sftmx)
         self.crossent_loss = tf.losses.softmax_cross_entropy(self.labels,
                                                              self.logits)
         self.norm_loss = tf.losses.get_regularization_losses()
@@ -282,14 +279,14 @@ class Model(object):
 
         # Optimizer.
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
-        learning_rate = tf.train.piecewise_constant(self.global_step,
-                                                    BOUNDARIES, VALUES)
-        op = tf.train.MomentumOptimizer(learning_rate, MOMENTUM, use_nesterov=True)
-        #op = tf.train.AdamOptimizer(LEARN_RATE)
-        #op = tf.train.GradientDescentOptimizer(0.001)
+        self.lr = tf.train.piecewise_constant(self.global_step, BOUNDARIES,
+                                              VALUES)
+        self.op = tf.train.MomentumOptimizer(self.lr, MOMENTUM,
+                                             use_nesterov=True)
 
-        self.train = slim.learning.create_train_op(self.total_loss, op,
-                                                   clip_gradient_norm=GRAD_NORM)
+        self.train = slim.learning.create_train_op(self.total_loss, self.op,
+                                                   self.global_step,
+                                                   summarize_gradients=True,)
 
         # Model Summaries.
         _loss = tf.summary.scalar('model/tot_loss', tf.reduce_mean(self.total_loss))
@@ -299,9 +296,8 @@ class Model(object):
         _grad_norm = tf.summary.scalar('model/grad_norm', tf.global_norm(grads))
         _var_norm = tf.summary.scalar('model/var_norm', tf.global_norm(tvs))
         _logits = tf.summary.histogram('model/preds', self.preds)
-        levels = tf.argmax(self.labels, 1)
         _t_acc = tf.summary.scalar(
-            'acc/train_acc', tf.contrib.metrics.accuracy(self.preds, levels))
+            'acc/train_acc', tf.contrib.metrics.accuracy(self.preds, self.levels))
 
         def reshape_filters(layer, label=0):
             label_index = label * (BATCH_SIZE / NUM_LABELS)
@@ -365,13 +361,21 @@ try:
     for i in range(step, NUM_STEPS):
         if i > EVEN_CUTOFF:
             batcher.even_batch = False
+
         if step % VALIDATION_EVERY_N == 0 and step > 1:
             print 'Validation'
             model.saver.save(sess, CKPTS_SAVE, global_step=sess.run(model.global_step))
-            batch_data, batch_arrays = batcher.get_validation_batch()
-            inputs = {model.x: batch_arrays, model.is_training: False}
-            preds = sess.run(model.preds, inputs)
-            accs = get_accuracies(sess, preds, batch_data['level'].as_matrix())
+            preds = []
+            labels = []
+            for j in range(10):
+                batch_data, batch_arrays = batcher.get_validation_batch()
+                inputs = {model.x: batch_arrays, model.is_training: False}
+                preds += sess.run(model.preds, inputs).tolist()
+                labels += batch_data['level'].tolist()
+
+            accs = get_accuracies(sess, preds, labels)
+            print 'Accuracies'
+            print accs
             accuracy_sum = get_accuracy_summaries(sess, accs, _acc_sums, _acc_plhlds)
 
             writer.add_summary(tf.Summary.FromString(accuracy_sum),
@@ -384,7 +388,8 @@ try:
         print batch_data['level'].values
         inputs = {
             model.x: batch_arrays,
-            model.labels: np.stack(batch_data['labels'].values)
+            model.labels: np.stack(batch_data['labels'].values),
+            model.levels: np.stack(batch_data['level'].values)
         }
 
         if step % SUMMARIES_EVERY_N == 0 and step > 1:
@@ -395,11 +400,11 @@ try:
             writer.flush()
 
         print 'Training'
-        fetched = sess.run([model.train, model.total_loss, model.preds],
+        fetched = sess.run([model.train, model.preds],
                            inputs)
-        print 'Loss: %f' % fetched[1]
+        print 'Loss: %f' % fetched[0]
         print 'Predictions:'
-        print fetched[2]
+        print fetched[1]
 
         step += 1
         print step
