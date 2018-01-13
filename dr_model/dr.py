@@ -236,8 +236,8 @@ class Model(object):
 
         with slim.arg_scope([slim.conv2d, slim.fully_connected],
                             weights_regularizer=slim.l2_regularizer(L2_REG),
-                            activation_fn=leaky,):
-                            #normalizer_fn=slim.batch_norm,
+                            activation_fn=leaky,
+                            normalizer_fn=slim.batch_norm,):
                             #normalizer_params={'is_training': is_training},
                             #biases_initializer=init_biases):
             # Block one.
@@ -262,8 +262,6 @@ class Model(object):
             net = slim.dropout(net, 0.5, is_training=is_training)
             self.fc1 = net = slim.fully_connected(net, 1024, activation_fn=None)
             net = slim.dropout(net, 0.5, is_training=is_training)
-            self.fc2 = net = slim.fully_connected(net, 1024, activation_fn=None)
-            net = slim.dropout(net, 0.5, is_training=is_training)
             self.logits = slim.fully_connected(net, NUM_LABELS, activation_fn=None)
             sftmx = tf.nn.softmax(self.logits)
             self.preds = tf.cast(tf.argmax(sftmx, 1), tf.int64)
@@ -271,7 +269,7 @@ class Model(object):
         # Losses.
         self.labels = tf.placeholder(tf.int64, name='labels')
         self.levels = tf.placeholder(tf.int64, name='levels')
-        self.mse_loss = tf.losses.mean_squared_error(self.labels, sftmx)
+        #self.mse_loss = tf.losses.mean_squared_error(self.levels, self.preds)
         self.crossent_loss = tf.losses.softmax_cross_entropy(self.labels,
                                                              self.logits)
         self.norm_loss = tf.losses.get_regularization_losses()
