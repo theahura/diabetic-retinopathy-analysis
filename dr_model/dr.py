@@ -29,7 +29,9 @@ EVEN_CUTOFF = NUM_STEPS/100 * 60
 SUMMARIES_EVERY_N = 100
 VALIDATION_EVERY_N = 200
 
-L2_REG = 0.0005
+MSE_WEIGHT = 0
+CX_WEIGHT = 1.0
+L2_REG = 0.0002*2
 LEAKY = 0.5
 MOMENTUM = 0.9
 LR_SCALE = 5.00
@@ -41,8 +43,8 @@ LOADED_BATCH = 7
 BATCH_SIZE = 64
 VAL_BATCH_SIZE = 64
 TRANSLATE = False
-ROTATE = False
-FLIP = False
+ROTATE = True
+FLIP = True
 
 LABELS_FP = './trainLabels.csv'
 DATA_FP = './train_2'
@@ -52,9 +54,9 @@ LOGDIR = './logs/'
 RESTORE = True
 NUM_LABELS = 5
 
-fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f_loss-%s' % (
+fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f_loss-%s_MSE-%f-%f' % (
     BATCH_SIZE, L2_REG, LR_SCALE, 'nesterov', MOMENTUM, EVEN_CUTOFF, LEAKY,
-    'MSE')
+    'MSE+Crossent', MSE_WEIGHT, CX_WEIGHT)
 
 CKPTS_SAVE = CKPTS_RESTORE + '/' + fname
 
@@ -142,11 +144,12 @@ class Batcher(object):
         # Get initial data.
         files = [os.path.join(data_fp, f) for f in os.listdir(data_fp)]
 
-        self.data = pandas.read_csv(label_fp).sample(frac=1, random_state=rng)
+        self.data = pandas.read_csv(label_fp)
 
         # Add filepath.
         files = sorted(files, key=lambda f: int(f.split('/')[-1].split('_')[0]))
         self.data['filename'] = files
+        self.data = self.data.sample(frac=1, random_state=rng)
 
         # Get onehots.
         onehots = np.eye(NUM_LABELS, dtype=int)
@@ -224,6 +227,26 @@ class Batcher(object):
         return self.next_val.pop(0)
 
 
+def quad_kappa_loss(y, t, y_pow=2, eps=1e-15):
+    t = tf.cast(t, tf.float32)
+    ratings = np.tile(np.arange(0, NUM_LABELS)[:, None], reps=(1, NUM_LABELS))
+    ratings_sq = (ratings - ratings.T)**2
+    weights = ratings_sq / (float(NUM_LABELS) - 1)**2
+
+    y_ = y ** y_pow
+    y_norm = y_ / (eps + tf.reduce_sum(y_, axis=1)[:, None])
+
+    hist_rater_a = tf.reduce_sum(y_norm, axis=0)
+    hist_rater_b = tf.reduce_sum(t, axis=0)
+
+    conf_mat = tf.matmul(tf.transpose(y_norm), t)
+
+    nom = tf.reduce_sum(weights * conf_mat)
+    expected_probs = tf.matmul(hist_rater_a[:, None], hist_rater_b[None, :])
+    denom = tf.reduce_sum(weights * expected_probs) / BATCH_SIZE
+    return -(1 - nom / denom)
+
+
 # Create network.
 class Model(object):
 
@@ -234,12 +257,13 @@ class Model(object):
         def leaky(x):
             return tf.nn.leaky_relu(x, LEAKY)
 
-        with slim.arg_scope([slim.conv2d, slim.fully_connected],
-                            weights_regularizer=slim.l2_regularizer(L2_REG),
+        init_biases = tf.constant_initializer(0.1)
+
+        with slim.arg_scope([slim.conv2d],
                             activation_fn=leaky,
-                            normalizer_fn=slim.batch_norm,):
-                            #normalizer_params={'is_training': is_training},
-                            #biases_initializer=init_biases):
+                            weights_initializer=tf.orthogonal_initializer,
+                            weights_regularizer=slim.l2_regularizer(L2_REG),
+                            biases_initializer=init_biases):
             # Block one.
             self.conv1 = net = slim.conv2d(x, num_outputs=32, kernel_size=7,
                                            stride=2)
@@ -257,23 +281,32 @@ class Model(object):
             net = slim.repeat(net, 4, slim.conv2d, 256, 3)
             self.pool5 = net = slim.max_pool2d(net, kernel_size=3)
 
+        with slim.arg_scope([slim.fully_connected],
+                            activation_fn=None,
+                            weights_initializer=tf.orthogonal_initializer,
+                            weights_regularizer=slim.l2_regularizer(L2_REG),
+                            biases_initializer=init_biases):
             # Dense layers.
             self.flattened = net = slim.flatten(net)
             net = slim.dropout(net, 0.5, is_training=is_training)
-            self.fc1 = net = slim.fully_connected(net, 1024, activation_fn=None)
+            self.fc1 = net = slim.fully_connected(net, 1024)
             net = slim.dropout(net, 0.5, is_training=is_training)
-            self.logits = slim.fully_connected(net, NUM_LABELS, activation_fn=None)
+            self.logits = slim.fully_connected(net, NUM_LABELS)
             sftmx = tf.nn.softmax(self.logits)
             self.preds = tf.cast(tf.argmax(sftmx, 1), tf.int64)
 
         # Losses.
         self.labels = tf.placeholder(tf.int64, name='labels')
         self.levels = tf.placeholder(tf.int64, name='levels')
-        #self.mse_loss = tf.losses.mean_squared_error(self.levels, self.preds)
+        self.mse_loss = tf.losses.mean_squared_error(self.levels, self.preds)
         self.crossent_loss = tf.losses.softmax_cross_entropy(self.labels,
                                                              self.logits)
+        self.log_loss = tf.losses.log_loss(self.labels, sftmx)
+        self.kappa_loss = quad_kappa_loss(sftmx, self.labels)
         self.norm_loss = tf.losses.get_regularization_losses()
-        self.total_loss = tf.losses.get_total_loss()
+        self.total_loss = tf.reduce_mean(tf.clip_by_value(self.crossent_loss, 0.8, 10**3) +
+                                         self.kappa_loss +
+                                         self.norm_loss)
 
         # Optimizer.
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
@@ -282,20 +315,27 @@ class Model(object):
         self.op = tf.train.MomentumOptimizer(self.lr, MOMENTUM,
                                              use_nesterov=True)
 
-        self.train = slim.learning.create_train_op(self.total_loss, self.op,
-                                                   self.global_step,
-                                                   summarize_gradients=True,)
+        tvs = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+        grads = tf.gradients(self.total_loss, tvs)
+        gvs = list(zip(grads, tvs))
+        self.train = self.op.apply_gradients(gvs, global_step=self.global_step)
 
         # Model Summaries.
         _loss = tf.summary.scalar('model/tot_loss', tf.reduce_mean(self.total_loss))
         _reg = tf.summary.scalar('model/reg_losses', tf.reduce_mean(self.norm_loss))
-        tvs = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-        grads = tf.gradients(self.total_loss, tvs)
+        _cx = tf.summary.scalar('model/cx_losses', self.crossent_loss)
+        _mse = tf.summary.scalar('model/mse_losses', self.mse_loss)
+        _log = tf.summary.scalar('model/log_losses', self.log_loss)
+        _kappa = tf.summary.scalar('model/kappa_losses', self.kappa_loss)
         _grad_norm = tf.summary.scalar('model/grad_norm', tf.global_norm(grads))
         _var_norm = tf.summary.scalar('model/var_norm', tf.global_norm(tvs))
+        _conv_out = tf.summary.histogram('model/conv_out', self.flattened)
+        _fc1 = tf.summary.histogram('model/fc1', self.fc1)
         _logits = tf.summary.histogram('model/preds', self.preds)
         _t_acc = tf.summary.scalar(
             'acc/train_acc', tf.contrib.metrics.accuracy(self.preds, self.levels))
+
+        _grads = [tf.summary.histogram('model/' + v.name, g) for g, v in gvs]
 
         def reshape_filters(layer, label=0):
             label_index = label * (BATCH_SIZE / NUM_LABELS)
@@ -317,14 +357,15 @@ class Model(object):
         _pool4_4 = tf.summary.image('pool4/label4', reshape_filters(self.pool4, 4))
         _pool5_4 = tf.summary.image('pool5/label4', reshape_filters(self.pool5, 4))
 
-        self.summary_op = tf.summary.merge([_loss, _reg,
-                                            _grad_norm,
-                                            _var_norm,
+        self.summary_op = tf.summary.merge([_loss, _reg, _cx, _mse, _log, _kappa,
+                                            _grad_norm, _var_norm,
+                                            _conv_out, _fc1,
                                             _logits, _t_acc, _input_0, _conv1_0,
                                             _pool1_0, _pool2_0, _pool3_0,
                                             _pool4_0, _pool5_0, _input_4,
                                             _conv1_4, _pool1_4, _pool2_4,
-                                            _pool3_4, _pool4_4, _pool5_4])
+                                            _pool3_4, _pool4_4, _pool5_4] +
+                                           _grads)
 
         self.saver = tf.train.Saver()
 
@@ -398,11 +439,11 @@ try:
             writer.flush()
 
         print 'Training'
-        fetched = sess.run([model.train, model.preds],
+        fetched = sess.run([model.train, model.total_loss, model.preds],
                            inputs)
-        print 'Loss: %f' % fetched[0]
+        print 'Loss: %f' % fetched[1]
         print 'Predictions:'
-        print fetched[1]
+        print fetched[2]
 
         step += 1
         print step
