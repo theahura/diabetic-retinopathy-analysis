@@ -2,9 +2,12 @@
 Batcher, model, training.
 
 TODO:
-    - add precision and recall
-    - normalize (sub mean, divide std div) per batch/across dataset
+    - try mse
+    - add precision, recall, auc, and one off/two off accuracy
+    - add test set in
     - try combining multiple eyes
+    - try densenet/resnet
+    - try global average pooling instead of fully connected
 """
 
 import os
@@ -29,7 +32,7 @@ EVEN_CUTOFF = NUM_STEPS/100 * 60
 SUMMARIES_EVERY_N = 100
 VALIDATION_EVERY_N = 200
 
-MSE_WEIGHT = 0
+MSE_WEIGHT = 1.0
 CX_WEIGHT = 1.0
 L2_REG = 0.0002*2
 LEAKY = 0.5
@@ -56,7 +59,7 @@ NUM_LABELS = 5
 
 fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f_loss-%s_MSE-%f-%f' % (
     BATCH_SIZE, L2_REG, LR_SCALE, 'nesterov', MOMENTUM, EVEN_CUTOFF, LEAKY,
-    'MSE+Crossent', MSE_WEIGHT, CX_WEIGHT)
+    'Kappa+Crossent', MSE_WEIGHT, CX_WEIGHT)
 
 CKPTS_SAVE = CKPTS_RESTORE + '/' + fname
 
@@ -301,11 +304,12 @@ class Model(object):
         self.mse_loss = tf.losses.mean_squared_error(self.levels, self.preds)
         self.crossent_loss = tf.losses.softmax_cross_entropy(self.labels,
                                                              self.logits)
+        clipped_cx = tf.clip_by_value(self.crossent_loss, 0.8, 10**3)
         self.log_loss = tf.losses.log_loss(self.labels, sftmx)
         self.kappa_loss = quad_kappa_loss(sftmx, self.labels)
         self.norm_loss = tf.losses.get_regularization_losses()
-        self.total_loss = tf.reduce_mean(tf.clip_by_value(self.crossent_loss, 0.8, 10**3) +
-                                         self.kappa_loss +
+        self.total_loss = tf.reduce_mean(CX_WEIGHT*clipped_cx +
+                                         MSE_WEIGHT*self.kappa_loss +
                                          self.norm_loss)
 
         # Optimizer.
