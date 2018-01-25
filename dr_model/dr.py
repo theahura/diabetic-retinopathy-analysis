@@ -57,7 +57,7 @@ LOGDIR = './logs/'
 RESTORE = True
 NUM_LABELS = 5
 
-fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f_loss-%s_MSE-%f-%f' % (
+fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f_loss-%s_weights-%f-%f_GAP' % (
     BATCH_SIZE, L2_REG, LR_SCALE, 'nesterov', MOMENTUM, EVEN_CUTOFF, LEAKY,
     'Kappa+Crossent', MSE_WEIGHT, CX_WEIGHT)
 
@@ -284,19 +284,18 @@ class Model(object):
             net = slim.repeat(net, 4, slim.conv2d, 256, 3)
             self.pool5 = net = slim.max_pool2d(net, kernel_size=3)
 
-        with slim.arg_scope([slim.fully_connected],
-                            activation_fn=None,
-                            weights_initializer=tf.orthogonal_initializer,
-                            weights_regularizer=slim.l2_regularizer(L2_REG),
-                            biases_initializer=init_biases):
-            # Dense layers.
-            self.flattened = net = slim.flatten(net)
-            net = slim.dropout(net, 0.5, is_training=is_training)
-            self.fc1 = net = slim.fully_connected(net, 1024)
-            net = slim.dropout(net, 0.5, is_training=is_training)
-            self.logits = slim.fully_connected(net, NUM_LABELS)
-            sftmx = tf.nn.softmax(self.logits)
-            self.preds = tf.cast(tf.argmax(sftmx, 1), tf.int64)
+            # Block six.
+            net = slim.repeat(net, 6, slim.conv2d, 512, 3)
+            self.pool6 = net = slim.max_pool2d(net, kernel_size=3)
+
+            # Block seven; GAP.
+            self.feats = slim.conv2d(net, num_outputs=1024, kernel_size=3, stride=1)
+            self.gap = tf.reduce_mean(self.feats, [1, 2])
+            net = slim.dropout(self.gap, 0.5, is_training=is_training)
+
+        self.logits = slim.fully_connected(net, NUM_LABELS, scope='fc')
+        sftmx = tf.nn.softmax(self.logits)
+        self.preds = tf.cast(tf.argmax(sftmx, 1), tf.int64)
 
         # Losses.
         self.labels = tf.placeholder(tf.int64, name='labels')
@@ -333,42 +332,50 @@ class Model(object):
         _kappa = tf.summary.scalar('model/kappa_losses', self.kappa_loss)
         _grad_norm = tf.summary.scalar('model/grad_norm', tf.global_norm(grads))
         _var_norm = tf.summary.scalar('model/var_norm', tf.global_norm(tvs))
-        _conv_out = tf.summary.histogram('model/conv_out', self.flattened)
-        _fc1 = tf.summary.histogram('model/fc1', self.fc1)
         _logits = tf.summary.histogram('model/preds', self.preds)
         _t_acc = tf.summary.scalar(
             'acc/train_acc', tf.contrib.metrics.accuracy(self.preds, self.levels))
 
-        _grads = [tf.summary.histogram('model/' + v.name, g) for g, v in gvs]
+        _grads = [tf.summary.histogram('model/' + v.name, g) for g, v in gvs
+                  if g is not None]
 
-        def reshape_filters(layer, label=0):
-            label_index = label * (BATCH_SIZE / NUM_LABELS)
+        def reshape(layer, label_index):
             return tf.expand_dims(tf.transpose(layer[label_index, :, :, :],
                                                [2, 0, 1]), -1)
-        _input_0 = tf.summary.image('conv0/input0', x[0:1])
-        _conv1_0 = tf.summary.image('conv1/label0', reshape_filters(self.conv1))
-        _pool1_0 = tf.summary.image('pool1/label0', reshape_filters(self.pool1))
-        _pool2_0 = tf.summary.image('pool2/label0', reshape_filters(self.pool2))
-        _pool3_0 = tf.summary.image('pool3/label0', reshape_filters(self.pool3))
-        _pool4_0 = tf.summary.image('pool4/label0', reshape_filters(self.pool4))
-        _pool5_0 = tf.summary.image('pool5/label0', reshape_filters(self.pool5))
+
+        def heatmap(index):
+            pred = self.preds[index]
+            fcs = [l for l in tf.global_variables() if l.name.startswith('fc')]
+            weights = tf.expand_dims(tf.transpose(fcs[0])[pred], axis=1)
+            f = self.feats[index]
+            h, w, c = f.shape
+            cam = tf.matmul(tf.transpose(weights), tf.reshape(f, (c, h*w)))
+            cam = tf.reshape(cam, (h, w, 1))
+            cam = tf.subtract(cam, tf.reduce_min(cam))
+            return tf.div(cam, tf.reduce_max(cam))
+
+        min_i = tf.argmin(self.levels)
+        max_i = tf.argmax(self.levels)
+        _input_0 = tf.summary.image('conv0/input0', x[min_i])
+        _hm0 = tf.summary.image('conv0/hm0', heatmap(min_i))
+        _conv1_0 = tf.summary.image('conv1/label0', reshape(self.conv1, min_i))
+        _pool1_0 = tf.summary.image('pool1/label0', reshape(self.pool1, min_i))
+        _pool2_0 = tf.summary.image('pool2/label0', reshape(self.pool2, min_i))
+        _pool3_0 = tf.summary.image('pool3/label0', reshape(self.pool3, min_i))
         _input_4 = tf.summary.image('conv0/input4',
-                                    [x[4 * (BATCH_SIZE / NUM_LABELS)]])
-        _conv1_4 = tf.summary.image('conv1/label4', reshape_filters(self.conv1, 4))
-        _pool1_4 = tf.summary.image('pool1/label4', reshape_filters(self.pool1, 4))
-        _pool2_4 = tf.summary.image('pool2/label4', reshape_filters(self.pool2, 4))
-        _pool3_4 = tf.summary.image('pool3/label4', reshape_filters(self.pool3, 4))
-        _pool4_4 = tf.summary.image('pool4/label4', reshape_filters(self.pool4, 4))
-        _pool5_4 = tf.summary.image('pool5/label4', reshape_filters(self.pool5, 4))
+                                    [x[max_i]])
+        _hm4 = tf.summary.image('conv0/hm0', heatmap(max_i))
+        _conv1_4 = tf.summary.image('conv1/label4', reshape(self.conv1, max_i))
+        _pool1_4 = tf.summary.image('pool1/label4', reshape(self.pool1, max_i))
+        _pool2_4 = tf.summary.image('pool2/label4', reshape(self.pool2, max_i))
+        _pool3_4 = tf.summary.image('pool3/label4', reshape(self.pool3, max_i))
 
         self.summary_op = tf.summary.merge([_loss, _reg, _cx, _mse, _log, _kappa,
                                             _grad_norm, _var_norm,
-                                            _conv_out, _fc1,
                                             _logits, _t_acc, _input_0, _conv1_0,
                                             _pool1_0, _pool2_0, _pool3_0,
-                                            _pool4_0, _pool5_0, _input_4,
-                                            _conv1_4, _pool1_4, _pool2_4,
-                                            _pool3_4, _pool4_4, _pool5_4] +
+                                            _input_4, _conv1_4, _pool1_4,
+                                            _pool2_4, _pool3_4, _hm0, _hm4] +
                                            _grads)
 
         self.saver = tf.train.Saver()
