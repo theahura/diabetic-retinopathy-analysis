@@ -33,11 +33,11 @@ SUMMARIES_EVERY_N = 100
 VALIDATION_EVERY_N = 200
 
 MSE_WEIGHT = 1.0
-CX_WEIGHT = 1.0
+CX_WEIGHT = 2.0
 L2_REG = 0.0002*2
 LEAKY = 0.5
 MOMENTUM = 0.9
-LR_SCALE = 5.00
+LR_SCALE = 20.00
 BOUNDARIES = [NUM_STEPS / 100 * i for i in [30, 50, 85, 95]]
 VALUES = [i * LR_SCALE for i in [0.001, 0.0005, 0.0001, 0.00001, 0.000001]]
 
@@ -59,7 +59,7 @@ NUM_LABELS = 5
 
 fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f_loss-%s_weights-%f-%f_GAP' % (
     BATCH_SIZE, L2_REG, LR_SCALE, 'nesterov', MOMENTUM, EVEN_CUTOFF, LEAKY,
-    'Kappa+Crossent', MSE_WEIGHT, CX_WEIGHT)
+    'MSE+Crossent', MSE_WEIGHT, CX_WEIGHT)
 
 CKPTS_SAVE = CKPTS_RESTORE + '/' + fname
 
@@ -152,6 +152,8 @@ class Batcher(object):
         # Add filepath.
         files = sorted(files, key=lambda f: int(f.split('/')[-1].split('_')[0]))
         self.data['filename'] = files
+
+        # Randomize.
         self.data = self.data.sample(frac=1, random_state=rng)
 
         # Get onehots.
@@ -260,40 +262,35 @@ class Model(object):
         def leaky(x):
             return tf.nn.leaky_relu(x, LEAKY)
 
-        init_biases = tf.constant_initializer(0.1)
-
         with slim.arg_scope([slim.conv2d],
                             activation_fn=leaky,
-                            weights_initializer=tf.orthogonal_initializer,
-                            weights_regularizer=slim.l2_regularizer(L2_REG),
-                            biases_initializer=init_biases):
+                            weights_regularizer=slim.l2_regularizer(L2_REG)):
             # Block one.
             self.conv1 = net = slim.conv2d(x, num_outputs=32, kernel_size=7,
                                            stride=2)
             self.pool1 = net = slim.max_pool2d(net, kernel_size=3)
             # Block two.
             net = slim.repeat(net, 2, slim.conv2d, 32, 3)
+            net = slim.batch_norm(net, is_training=self.is_training)
             self.pool2 = net = slim.max_pool2d(net, kernel_size=3)
             # Block three.
             net = slim.repeat(net, 2, slim.conv2d, 64, 3)
+            net = slim.batch_norm(net, is_training=self.is_training)
             self.pool3 = net = slim.max_pool2d(net, kernel_size=3)
             # Block four.
             net = slim.repeat(net, 4, slim.conv2d, 128, 3)
+            net = slim.batch_norm(net, is_training=self.is_training)
             self.pool4 = net = slim.max_pool2d(net, kernel_size=3)
-            # Block five.
-            net = slim.repeat(net, 4, slim.conv2d, 256, 3)
-            self.pool5 = net = slim.max_pool2d(net, kernel_size=3)
 
-            # Block six.
-            net = slim.repeat(net, 6, slim.conv2d, 512, 3)
-            self.pool6 = net = slim.max_pool2d(net, kernel_size=3)
-
-            # Block seven; GAP.
-            self.feats = slim.conv2d(net, num_outputs=1024, kernel_size=3, stride=1)
+            # Block five; GAP.
+            self.feats = slim.conv2d(net, num_outputs=1024, kernel_size=3)
             self.gap = tf.reduce_mean(self.feats, [1, 2])
             net = slim.dropout(self.gap, 0.5, is_training=is_training)
 
-        self.logits = slim.fully_connected(net, NUM_LABELS, scope='fc')
+        self.logits = slim.fully_connected(net, NUM_LABELS,
+                                           activation_fn=None,
+                                           weights_regularizer=slim.l2_regularizer(L2_REG),
+                                           scope='fc')
         sftmx = tf.nn.softmax(self.logits)
         self.preds = tf.cast(tf.argmax(sftmx, 1), tf.int64)
 
@@ -301,14 +298,13 @@ class Model(object):
         self.labels = tf.placeholder(tf.int64, name='labels')
         self.levels = tf.placeholder(tf.int64, name='levels')
         self.mse_loss = tf.losses.mean_squared_error(self.levels, self.preds)
+        self.kappa = quad_kappa_loss(sftmx, self.labels)
         self.crossent_loss = tf.losses.softmax_cross_entropy(self.labels,
                                                              self.logits)
         clipped_cx = tf.clip_by_value(self.crossent_loss, 0.8, 10**3)
-        self.log_loss = tf.losses.log_loss(self.labels, sftmx)
-        self.kappa_loss = quad_kappa_loss(sftmx, self.labels)
         self.norm_loss = tf.losses.get_regularization_losses()
         self.total_loss = tf.reduce_mean(CX_WEIGHT*clipped_cx +
-                                         MSE_WEIGHT*self.kappa_loss +
+                                         MSE_WEIGHT*self.kappa +
                                          self.norm_loss)
 
         # Optimizer.
@@ -321,15 +317,15 @@ class Model(object):
         tvs = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         grads = tf.gradients(self.total_loss, tvs)
         gvs = list(zip(grads, tvs))
-        self.train = self.op.apply_gradients(gvs, global_step=self.global_step)
+        #self.train = self.op.apply_gradients(gvs, global_step=self.global_step)
+        self.train = slim.learning.create_train_op(self.total_loss, self.op,
+                                                   self.global_step)
 
         # Model Summaries.
         _loss = tf.summary.scalar('model/tot_loss', tf.reduce_mean(self.total_loss))
         _reg = tf.summary.scalar('model/reg_losses', tf.reduce_mean(self.norm_loss))
         _cx = tf.summary.scalar('model/cx_losses', self.crossent_loss)
         _mse = tf.summary.scalar('model/mse_losses', self.mse_loss)
-        _log = tf.summary.scalar('model/log_losses', self.log_loss)
-        _kappa = tf.summary.scalar('model/kappa_losses', self.kappa_loss)
         _grad_norm = tf.summary.scalar('model/grad_norm', tf.global_norm(grads))
         _var_norm = tf.summary.scalar('model/var_norm', tf.global_norm(tvs))
         _logits = tf.summary.histogram('model/preds', self.preds)
@@ -349,28 +345,29 @@ class Model(object):
             weights = tf.expand_dims(tf.transpose(fcs[0])[pred], axis=1)
             f = self.feats[index]
             h, w, c = f.shape
-            cam = tf.matmul(tf.transpose(weights), tf.reshape(f, (c, h*w)))
+            cam = tf.matmul(tf.reshape(f, (h*w, c)), weights)
             cam = tf.reshape(cam, (h, w, 1))
             cam = tf.subtract(cam, tf.reduce_min(cam))
-            return tf.div(cam, tf.reduce_max(cam))
+            cam = tf.div(cam, tf.reduce_max(cam))
+            cam = tf.expand_dims(cam, axis=0)
+            return tf.image.resize_bilinear(cam, [512, 512])
 
         min_i = tf.argmin(self.levels)
         max_i = tf.argmax(self.levels)
-        _input_0 = tf.summary.image('conv0/input0', x[min_i])
+        _input_0 = tf.summary.image('conv0/input0', [x[min_i]])
         _hm0 = tf.summary.image('conv0/hm0', heatmap(min_i))
         _conv1_0 = tf.summary.image('conv1/label0', reshape(self.conv1, min_i))
         _pool1_0 = tf.summary.image('pool1/label0', reshape(self.pool1, min_i))
         _pool2_0 = tf.summary.image('pool2/label0', reshape(self.pool2, min_i))
         _pool3_0 = tf.summary.image('pool3/label0', reshape(self.pool3, min_i))
-        _input_4 = tf.summary.image('conv0/input4',
-                                    [x[max_i]])
-        _hm4 = tf.summary.image('conv0/hm0', heatmap(max_i))
+        _input_4 = tf.summary.image('conv0/input4', [x[max_i]])
+        _hm4 = tf.summary.image('conv0/hm4', heatmap(max_i))
         _conv1_4 = tf.summary.image('conv1/label4', reshape(self.conv1, max_i))
         _pool1_4 = tf.summary.image('pool1/label4', reshape(self.pool1, max_i))
         _pool2_4 = tf.summary.image('pool2/label4', reshape(self.pool2, max_i))
         _pool3_4 = tf.summary.image('pool3/label4', reshape(self.pool3, max_i))
 
-        self.summary_op = tf.summary.merge([_loss, _reg, _cx, _mse, _log, _kappa,
+        self.summary_op = tf.summary.merge([_loss, _reg, _cx, _mse,
                                             _grad_norm, _var_norm,
                                             _logits, _t_acc, _input_0, _conv1_0,
                                             _pool1_0, _pool2_0, _pool3_0,
