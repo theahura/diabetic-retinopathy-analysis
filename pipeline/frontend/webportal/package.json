@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "description": "Frontend for drcam",
   "main": "upload.js",
-  "dependencies": {},
+  "dependencies": {
+    "material-components-web": "^0.28.0"
+  },
   "devDependencies": {},
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
