@@ -351,9 +351,7 @@ class Model(object):
             cam = tf.subtract(cam, tf.reduce_min(cam))
             cam = tf.div(cam, tf.reduce_max(cam))
             cam = tf.expand_dims(cam, axis=0)
-            cam = tf.image.resize_bilinear(cam, [512, 512])
-            cam = x[index] * 0.5 + cam[0] * 0.3
-            return tf.expand_dims(cam, axis=0)
+            return tf.image.resize_bilinear(cam, [512, 512])
 
         min_i = tf.argmin(self.levels)
         max_i = tf.argmax(self.levels)
