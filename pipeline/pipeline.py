@@ -1,7 +1,7 @@
 import os
 
 import cv2
-from flask import Flask, jsonify, redirect, render_template, request, send_file
+from flask import Flask, jsonify, redirect, render_template, request, send_from_directory
 import numpy as np
 from werkzeug.utils import secure_filename
 
@@ -51,19 +51,24 @@ def upload():
             i += 1
         file.save(filepath)
         im, preds, hms = model_runner.get_prediction(filepath)
-        hm = cv2.applyColorMap(np.uint8(hms[0]), cv2.COLORMAP_JET)
+        hm = cv2.applyColorMap(np.uint8(hms[0]*255), cv2.COLORMAP_JET)
         hm_fp = os.path.splitext(filepath)[0] + '_hm.png'
         cv2.imwrite(hm_fp, hm)
         im_fp = os.path.splitext(filepath)[0] + '_processed.png'
         cv2.imwrite(im_fp, im)
-        resp = {'hm': hm_fp, 'pred': preds[0], 'im_p': im_fp}
+        hm_im = hm * 0.3 + im * 0.5
+        hm_im_fp = os.path.splitext(filepath)[0] + '_hm_process.png'
+        cv2.imwrite(hm_im_fp, hm_im)
+        resp = {'hm': hm_fp, 'pred': preds[0], 'im_p': im_fp, 'hm_im': hm_im_fp}
         return jsonify(resp)
 
 
 @app.route("/image/<path:fp>", methods=["GET"])
 def get_image(fp):
     if fp and os.path.isfile(fp):
-        return send_file(fp)
+        fp = os.path.basename(fp)
+        return send_from_directory(app.config['UPLOAD_FOLDER'], fp,
+                                   mimetype='image/png')
 
 
 def main():

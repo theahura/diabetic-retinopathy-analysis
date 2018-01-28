@@ -1,17 +1,5 @@
 $(document).ready(() => {
 	
-	function getImage(fp, callback) {
-		$.ajax({
-			url : '/image/' + fp,
-			type: 'GET',
-			processData: false,
-			contentType: false,
-			success: function(image) {
-				callback(image);
-			}
-		});
-	}
-
 	$("#file-upload").change(() => {
 		var input = $('#file-upload')[0];
 		if (input.files && input.files[0]) {
@@ -36,14 +24,12 @@ $(document).ready(() => {
 				success: function(data) {
 					pred = data['pred']
 					$('#prediction').text(pred);
-					getImage(data['hm'], (hm) => {
-						$('#heatmap-image-display').attr('src', e.target.result);
-						$('#heatmap-image-display').show();	
-					});
-					getImage(data['im_p'], (im) => {
-						$('#process-image-display').attr('src', e.target.result);
-						$('#process-image-display').show();	
-					});
+					$('#heatmap-image-display').attr('src', '/image/' + data['hm']);
+					$('#heatmap-image-display').show();	
+					$('#process-image-display').attr('src', '/image/' + data['im_p']);
+					$('#process-image-display').show();	
+					$('#both-image-display').attr('src', '/image/' + data['hm_im']);
+					$('#both-image-display').show();	
 				}
 			});
 		}

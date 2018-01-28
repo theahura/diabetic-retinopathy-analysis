@@ -70,7 +70,7 @@ class Model(object):
             cam = tf.div(cam, tf.reduce_max(cam))
             cam = tf.expand_dims(cam, axis=0)
             cam = tf.image.resize_bilinear(cam, [512, 512])
-            return tf.expand_dims(cam, axis=0)
+            return cam 
 
         self.heatmap = heatmap(0)
 
