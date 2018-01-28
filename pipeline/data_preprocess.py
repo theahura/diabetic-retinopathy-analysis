@@ -68,6 +68,4 @@ def process_image(f):
     # Resize.
     crop.thumbnail(size, Image.ANTIALIAS)
 
-    IPython.embed()
-
     return np.asarray(crop, dtype=np.uint8)

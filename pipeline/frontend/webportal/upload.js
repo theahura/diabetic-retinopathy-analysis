@@ -1,14 +1,25 @@
 $(document).ready(() => {
 	
-	$("#file-upload").change(() => {
+	function getImage(fp, callback) {
+		$.ajax({
+			url : '/image/' + fp,
+			type: 'GET',
+			processData: false,
+			contentType: false,
+			success: function(image) {
+				callback(image);
+			}
+		});
+	}
 
+	$("#file-upload").change(() => {
 		var input = $('#file-upload')[0];
 		if (input.files && input.files[0]) {
 			var reader = new FileReader();
 
 			reader.onload = function(e) {
-			  	$('#image-display').attr('src', e.target.result);
-				$('#image-display').show();	
+			  	$('#upload-image-display').attr('src', e.target.result);
+				$('#upload-image-display').show();	
 			}
 
 			reader.readAsDataURL(input.files[0]);
@@ -23,7 +34,16 @@ $(document).ready(() => {
 				processData: false,
 				contentType: false,
 				success: function(data) {
-					$('#prediction').text($('#prediction').text() + data);
+					pred = data['pred']
+					$('#prediction').text(pred);
+					getImage(data['hm'], (hm) => {
+						$('#heatmap-image-display').attr('src', e.target.result);
+						$('#heatmap-image-display').show();	
+					});
+					getImage(data['im_p'], (im) => {
+						$('#process-image-display').attr('src', e.target.result);
+						$('#process-image-display').show();	
+					});
 				}
 			});
 		}

@@ -326,6 +326,7 @@ class Model(object):
         _reg = tf.summary.scalar('model/reg_losses', tf.reduce_mean(self.norm_loss))
         _cx = tf.summary.scalar('model/cx_losses', self.crossent_loss)
         _mse = tf.summary.scalar('model/mse_losses', self.mse_loss)
+        _kappa = tf.summary.scalar('model/kappa_losses', self.kappa)
         _grad_norm = tf.summary.scalar('model/grad_norm', tf.global_norm(grads))
         _var_norm = tf.summary.scalar('model/var_norm', tf.global_norm(tvs))
         _logits = tf.summary.histogram('model/preds', self.preds)
@@ -339,7 +340,7 @@ class Model(object):
             return tf.expand_dims(tf.transpose(layer[label_index, :, :, :],
                                                [2, 0, 1]), -1)
 
-        def heatmap(index):
+        def heatmap(index, x):
             pred = self.preds[index]
             fcs = [l for l in tf.global_variables() if l.name.startswith('fc')]
             weights = tf.expand_dims(tf.transpose(fcs[0])[pred], axis=1)
@@ -350,24 +351,26 @@ class Model(object):
             cam = tf.subtract(cam, tf.reduce_min(cam))
             cam = tf.div(cam, tf.reduce_max(cam))
             cam = tf.expand_dims(cam, axis=0)
-            return tf.image.resize_bilinear(cam, [512, 512])
+            cam = tf.image.resize_bilinear(cam, [512, 512])
+            cam = x[index] * 0.5 + cam[0] * 0.3
+            return tf.expand_dims(cam, axis=0)
 
         min_i = tf.argmin(self.levels)
         max_i = tf.argmax(self.levels)
         _input_0 = tf.summary.image('conv0/input0', [x[min_i]])
-        _hm0 = tf.summary.image('conv0/hm0', heatmap(min_i))
+        _hm0 = tf.summary.image('conv0/hm0', heatmap(min_i, x))
         _conv1_0 = tf.summary.image('conv1/label0', reshape(self.conv1, min_i))
         _pool1_0 = tf.summary.image('pool1/label0', reshape(self.pool1, min_i))
         _pool2_0 = tf.summary.image('pool2/label0', reshape(self.pool2, min_i))
         _pool3_0 = tf.summary.image('pool3/label0', reshape(self.pool3, min_i))
         _input_4 = tf.summary.image('conv0/input4', [x[max_i]])
-        _hm4 = tf.summary.image('conv0/hm4', heatmap(max_i))
+        _hm4 = tf.summary.image('conv0/hm4', heatmap(max_i, x))
         _conv1_4 = tf.summary.image('conv1/label4', reshape(self.conv1, max_i))
         _pool1_4 = tf.summary.image('pool1/label4', reshape(self.pool1, max_i))
         _pool2_4 = tf.summary.image('pool2/label4', reshape(self.pool2, max_i))
         _pool3_4 = tf.summary.image('pool3/label4', reshape(self.pool3, max_i))
 
-        self.summary_op = tf.summary.merge([_loss, _reg, _cx, _mse,
+        self.summary_op = tf.summary.merge([_loss, _reg, _cx, _mse, _kappa,
                                             _grad_norm, _var_norm,
                                             _logits, _t_acc, _input_0, _conv1_0,
                                             _pool1_0, _pool2_0, _pool3_0,
