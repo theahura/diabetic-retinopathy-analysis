@@ -14,6 +14,9 @@ $(document).ready(() => {
 
 			var formData = new FormData();
 			formData.append("image", input.files[0]);
+			console.log(formData);
+			console.log(input.files[0]);
+			console.log('sending request');
 
 			$.ajax({
 				url : '/upload',
@@ -22,6 +25,7 @@ $(document).ready(() => {
 				processData: false,
 				contentType: false,
 				success: function(data) {
+					console.log('success');
 					pred = data['pred']
 					$('#prediction').text(pred);
 					$('#heatmap-image-display').attr('src', '/image/' + data['hm']);
@@ -30,6 +34,13 @@ $(document).ready(() => {
 					$('#process-image-display').show();	
 					$('#both-image-display').attr('src', '/image/' + data['hm_im']);
 					$('#both-image-display').show();	
+				},
+				error: function(jqXHR, textStatus, errorThrown) {
+					console.log(jqXHR);
+					console.log(textStatus);
+					console.log(errorThrown);
+					var err = 'Request failed: ' + errorThrown + '. Please contact morningsidelabs@gmail.com.';
+					alert(err);
 				}
 			});
 		}
