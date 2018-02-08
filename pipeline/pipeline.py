@@ -37,11 +37,14 @@ def index():
 def upload():
     print 'got request'
     if 'image' not in request.files:
+        print 'error: one'
         return redirect(request.url)
     file = request.files['image']
     if file.filename == '':
+        print 'error: two'
         return redirect(request.url)
     if file and allowed_file(file.filename):
+        print 'uploading'
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         i = 1
@@ -49,8 +52,10 @@ def upload():
             filepath = os.path.join(app.config['UPLOAD_FOLDER'],
                                     str(i) + '_' + filename)
             i += 1
+        print 'saving'
         file.save(filepath)
         im, preds, hms = model_runner.get_prediction(filepath)
+        print 'got output'
         hm = cv2.applyColorMap(np.uint8(hms[0]*255), cv2.COLORMAP_JET)
         hm_fp = os.path.splitext(filepath)[0] + '_hm.png'
         cv2.imwrite(hm_fp, hm)
@@ -59,6 +64,7 @@ def upload():
         hm_im = hm * 0.3 + im * 0.5
         hm_im_fp = os.path.splitext(filepath)[0] + '_hm_process.png'
         cv2.imwrite(hm_im_fp, hm_im)
+        print 'saved output'
         resp = {'hm': hm_fp, 'pred': preds[0], 'im_p': im_fp, 'hm_im': hm_im_fp}
         return jsonify(resp)
 
