@@ -7,7 +7,7 @@ TODO:
     - add test set in
     - try combining multiple eyes
     - try resnet/capsule net
-    - try global average pooling instead of fully connected
+    - multilabel classification with new data
 """
 
 import os
@@ -136,6 +136,7 @@ class Batcher(object):
         self.next_val = []
         self.next_test = []
         self.index = 0
+        self.index_lock = threading.Lock()
 
         # Get initial data.
         files = [os.path.join(data_fp, f) for f in os.listdir(data_fp)]
@@ -169,7 +170,8 @@ class Batcher(object):
             for _ in range(NUM_BATCH_THREADS):
                 start_daemon_thread(self._get_batch, args=(BATCH_SIZE,))
         else:
-            start_daemon_thread(self._get_test_batch, args=(BATCH_SIZE,))
+            for _ in range(NUM_BATCH_THREADS):
+                start_daemon_thread(self._get_ordered_batch, args=(BATCH_SIZE,))
 
     def _get_distribution_batch(self, size):
         """Samples a minibatch according to the true distribution."""
@@ -195,6 +197,23 @@ class Batcher(object):
         batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
         return batch_data, batch_arrays/255.0
 
+    def _get_ordered_batch(self, size):
+        """Samples a minibatch evenly across classes, in order."""
+        while True:
+            self.index_lock.acquire()
+            if len(self.next_test) >= LOADED_BATCH:
+                self.index_lock.release()
+                continue
+            if self.index >= len(self.data):
+                return
+            start = self.index
+            end = min(self.index + size, len(self.data))
+            self.index += size
+            self.index_lock.release()
+            batch_data = self.data.iloc[start:end]
+            batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
+            self.next_test.append((batch_data, batch_arrays/255.0))
+
     def _get_batch(self, size):
         """Preloads LOADED_BATCH train minibatches."""
         while True:
@@ -205,20 +224,6 @@ class Batcher(object):
             else:
                 data, arrays = self._get_distribution_batch(size)
             self.next_batch.append((data, arrays))
-
-    def _get_test_batch(self, size):
-        """Samples a minibatch evenly across classes, in order."""
-        while True:
-            if len(self.next_val) >= LOADED_BATCH:
-                continue
-            if self.index >= len(self.data):
-                return
-            start = self.index
-            end = min(self.index + size, len(self.data))
-            self.index += size
-            batch_data = self.data.iloc[start:end]
-            batch_arrays = np.stack(batch_data['filename'].map(open_files).values)
-            self.next_test.append((batch_data, batch_arrays/255.0))
 
     def _get_val_batch(self, size):
         """Preloads two validation minibatches."""
@@ -302,15 +307,19 @@ class Model(object):
             self.feats = slim.conv2d(net, num_outputs=1024, kernel_size=3)
             self.gap = tf.reduce_mean(self.feats, [1, 2])
 
-        self.logits = slim.conv2d(net, NUM_LABELS, [1, 1], activation_fn=None,
-                                  scope='fc')
-        sftmx = slim.softmax(self.logits)
+        net = slim.dropout(self.gap, 0.5, is_training=is_training)
+        self.logits = slim.fully_connected(net, NUM_LABELS,
+                                           activation_fn=None,
+                                           weights_regularizer=slim.l2_regularizer(L2_REG),
+                                           scope='fc')
+        sftmx = tf.nn.softmax(self.logits)
         self.preds = tf.cast(tf.argmax(sftmx, 1), tf.int64)
 
         # Losses.
         self.labels = tf.placeholder(tf.int64, name='labels')
         self.levels = tf.placeholder(tf.int64, name='levels')
         self.mse_loss = tf.losses.mean_squared_error(self.levels, self.preds)
+
         self.kappa = quad_kappa_loss(sftmx, self.labels)
         self.crossent_loss = tf.losses.softmax_cross_entropy(self.labels,
                                                              self.logits)

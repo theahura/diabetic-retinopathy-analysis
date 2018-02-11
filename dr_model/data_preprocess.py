@@ -17,7 +17,7 @@ from PIL import Image, ImageChops, ImageOps
 DO_TEST = False
 scale = 180
 
-fp = 'train/*.jpeg'
+fp = 'test/*.jpeg'
 
 size = 512, 512
 scale = 500
@@ -30,48 +30,48 @@ def scaleRadius(img, scale):
 
 
 for i, f in enumerate(glob.glob(fp)):
-    a = cv2.imread(f)
+    try:
+        a = cv2.imread(f)
 
-    # Radius crop and color balance.
-    a = scaleRadius(a, scale)
-    b = np.zeros(a.shape)
-    cv2.circle(b, (a.shape[1]/2, a.shape[0]/2), int(scale*0.9), (1, 1, 1), -1, 8, 0)
-    aa = cv2.addWeighted(a, 4, cv2.GaussianBlur(a, (0, 0), scale/30), -4, 128)*b + 128*(1 - b)
+        # Radius crop and color balance.
+        a = scaleRadius(a, scale)
+        b = np.zeros(a.shape)
+        cv2.circle(b, (a.shape[1]/2, a.shape[0]/2), int(scale*0.9), (1, 1, 1), -1, 8, 0)
+        aa = cv2.addWeighted(a, 4, cv2.GaussianBlur(a, (0, 0), scale/30), -4, 128)*b + 128*(1 - b)
 
-    # Remove border.
-    image = Image.fromarray(np.uint8(aa))
-    diff = max(image.size) - min(image.size)
-    crop_size = diff/2
+        # Remove border.
+        image = Image.fromarray(np.uint8(aa))
+        diff = max(image.size) - min(image.size)
+        crop_size = diff/2
 
-    if image.size[0] > image.size[1]:
-        crop = image.crop(
-            (
-                crop_size,
-                0,
-                image.size[0] - crop_size,
-                image.size[1]
+        if image.size[0] > image.size[1]:
+            crop = image.crop(
+                (
+                    crop_size,
+                    0,
+                    image.size[0] - crop_size,
+                    image.size[1]
+                )
             )
-        )
-    else:
-        crop = image.crop(
-            (
-                0,
-                crop_size,
-                image.size[0],
-                image.size[1] - crop_size
+        else:
+            crop = image.crop(
+                (
+                    0,
+                    crop_size,
+                    image.size[0],
+                    image.size[1] - crop_size
+                )
             )
-        )
 
-    # Handle rounding issues.
-    max_side = max(crop.size)
-    crop = crop.resize((max_side, max_side), Image.ANTIALIAS)
+        # Handle rounding issues.
+        max_side = max(crop.size)
+        crop = crop.resize((max_side, max_side), Image.ANTIALIAS)
 
-    # Resize.
-    crop = Image.open(f)
-    crop.thumbnail(size, Image.ANTIALIAS)
+        # Resize.
+        crop.thumbnail(size, Image.ANTIALIAS)
 
-    # Save.
-    crop.save(f)
-
-    print i
-    print f
+        # Save.
+        crop.save(f)
+    except:
+        print i
+        print f
