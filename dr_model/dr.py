@@ -312,15 +312,15 @@ class Model(object):
                                            activation_fn=None,
                                            weights_regularizer=slim.l2_regularizer(L2_REG),
                                            scope='fc')
-        sftmx = tf.nn.softmax(self.logits)
-        self.preds = tf.cast(tf.argmax(sftmx, 1), tf.int64)
+        self.sftmx = tf.nn.softmax(self.logits)
+        self.preds = tf.cast(tf.argmax(self.sftmx, 1), tf.int64)
 
         # Losses.
         self.labels = tf.placeholder(tf.int64, name='labels')
         self.levels = tf.placeholder(tf.int64, name='levels')
         self.mse_loss = tf.losses.mean_squared_error(self.levels, self.preds)
 
-        self.kappa = quad_kappa_loss(sftmx, self.labels)
+        self.kappa = quad_kappa_loss(self.sftmx, self.labels)
         self.crossent_loss = tf.losses.softmax_cross_entropy(self.labels,
                                                              self.logits)
         clipped_cx = tf.clip_by_value(self.crossent_loss, 0.8, 10**3)

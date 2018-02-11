@@ -6,6 +6,7 @@ TODO:
 
 import json
 import numpy as np
+import sklearn.metrics as metrics
 import tensorflow as tf
 
 import IPython
@@ -68,7 +69,7 @@ while True:
         break
 
     inputs = {model.x: batch_arrays, model.is_training: False}
-    preds, logits = sess.run([model.preds, model.logits], inputs)
+    preds, logits = sess.run([model.preds, model.sftmx], inputs)
     preds = preds.tolist()
     logits = logits.tolist()
     labels = batch_data['level'].tolist()
