@@ -42,9 +42,9 @@ def main():
 
 
 
+    camera = picamera.PiCamera()
     try:
         #Load picamera and begin preview
-        camera = picamera.PiCamera()
         camera.resolution = (512, 512)
         stream = io.BytesIO()
 
@@ -112,7 +112,7 @@ def main():
 
 
             #Display results to user
-            fig = plt.figure()
+            fig = plt.figure(figsize=(10,8))
 
             plt.subplot(221)
             plt.imshow(image)
@@ -136,7 +136,8 @@ def main():
     except:
         raise
     finally:
-        GPIO.cleanup()
+        if not auto:
+            GPIO.cleanup()
         camera.close()
         print "exiting"    
 
