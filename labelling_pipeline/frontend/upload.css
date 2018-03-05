@@ -1,0 +1,41 @@
+img {
+	align-self: center;
+}
+
+.hidden {
+	display: none;	
+}
+
+.spacer-45 {
+	height: 45%;
+}
+
+.mdc-card {
+	height: 100%;
+	display: block;
+}
+
+.preview-image {
+	margin-top: 50px;
+}
+
+.checkbox-container {
+	display: flex;
+	flex-direction: row;
+}
+
+	.checkbox-label {
+		padding: 10px;
+	}
+
+.symptom-container {
+	display: flex;
+	height: 100%;
+}
+
+	.col {
+		flex: 1;
+		flex-direction: column;
+	}
+
+
