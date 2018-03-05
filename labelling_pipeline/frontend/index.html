@@ -1,0 +1,356 @@
+<html>
+	<head>
+		<title>drCAM</title>
+		<link rel="stylesheet" href="{{ url_for('static', filename = 'node_modules/material-components-web/dist/material-components-web.css') }}">
+		<link rel="stylesheet" href="{{ url_for('static', filename = 'upload.css') }}">
+	</head>
+	<body>
+    <h2 class="mdc-typography--display2">Upload an Image</h2>
+    <div class="mdc-form-field">
+			<input type="file" class="mdc-button" accept="image/*" id="file-upload">
+    </div>
+
+		<br>
+
+		<section class="mdc-card__media">
+			<img id="upload-image-display" src="#" class="hidden" height="512"/>
+		</section>
+
+		<div class="mdc-form-field">
+			<div class="mdc-layout-grid">
+				<div class="mdc-layout-grid__inner">
+					<div class="mdc-layout-grid__cell--span-3">
+
+						<div class="mdc-card">
+							<div class="mdc-card__media mdc-card__media--square">
+								<div class="mdc-card__media-content">Severity</div>
+							</div>
+							<div class="checkbox-container">
+								<div class="mdc-radio">
+									<input class="mdc-radio__native-control" type="radio" id="severity-1" name="severity" checked>
+									<div class="mdc-radio__background">
+										<div class="mdc-radio__outer-circle"></div>
+										<div class="mdc-radio__inner-circle"></div>
+									</div>
+								</div>
+								<label class="checkbox-label" id="radio-1-label" for="severity-1">(0) No DR </label>
+							</div>
+							<div class="checkbox-container">
+								<div class="mdc-radio">
+									<input class="mdc-radio__native-control" type="radio" id="severity-2" name="severity">
+									<div class="mdc-radio__background">
+										<div class="mdc-radio__outer-circle"></div>
+										<div class="mdc-radio__inner-circle"></div>
+									</div>
+								</div>
+								<label class="checkbox-label" id="radio-2-label" for="radio-2"> (1) Mild Non-proliferative</label>
+							</div>
+							<div class="checkbox-container">
+								<div class="mdc-radio">
+									<input class="mdc-radio__native-control" type="radio" id="severity-3" name="severity">
+									<div class="mdc-radio__background">
+										<div class="mdc-radio__outer-circle"></div>
+										<div class="mdc-radio__inner-circle"></div>
+									</div>
+								</div>
+								<label class="checkbox-label" id="radio-3-label" for="radio-3"> (2) Moderate Non-proliferative </label>
+							</div>
+							<div class="checkbox-container">
+								<div class="mdc-radio">
+									<input class="mdc-radio__native-control" type="radio" id="severity-4" name="severity">
+									<div class="mdc-radio__background">
+										<div class="mdc-radio__outer-circle"></div>
+										<div class="mdc-radio__inner-circle"></div>
+									</div>
+								</div>
+								<label class="checkbox-label" id="radio-4-label" for="radio-4">(3) Severe Non-proliferative </label>
+							</div>
+							<div class="checkbox-container">
+								<div class="mdc-radio">
+									<input class="mdc-radio__native-control" type="radio" id="severity-5" name="severity">
+									<div class="mdc-radio__background">
+										<div class="mdc-radio__outer-circle"></div>
+										<div class="mdc-radio__inner-circle"></div>
+									</div>
+								</div>
+								<label class="checkbox-label" id="radio-5-label" for="radio-5">(4) Proliferative </label>
+							</div>
+							<div class="spacer-100"></div>
+						</div>
+					</div>
+					<div class="mdc-layout-grid__cell--span-7">
+						<div class="mdc-card">
+
+							<div class="mdc-card__media mdc-card__media--square">
+								<div class="mdc-card__media-content">Symptoms</div>
+							</div>
+
+							<div class="symptom-container">
+								<div class="col">
+			 
+									<div class="checkbox-container">
+										<div class="mdc-checkbox">
+											<input type="checkbox"
+														 id="micro-aneurysms"
+														 name="micro-aneurysms"
+														 class="mdc-checkbox__native-control"/>
+											<div class="mdc-checkbox__background">
+												<svg class="mdc-checkbox__checkmark"
+														 viewBox="0 0 24 24">
+													<path class="mdc-checkbox__checkmark-path"
+																fill="none"
+																stroke="white"
+																d="M1.73,12.91 8.1,19.28 22.79,4.59"/>
+												</svg>
+												<div class="mdc-checkbox__mixedmark"></div>
+											</div>
+										</div>
+										<label for="my-checkbox" class="checkbox-label">Micro Aneurysms</label>
+									</div>
+									<br>
+
+									<div class="checkbox-container">
+										<div class="mdc-checkbox">
+											<input type="checkbox"
+														 id="venous-beading"
+														 name="venous-beading"
+														 class="mdc-checkbox__native-control"/>
+											<div class="mdc-checkbox__background">
+												<svg class="mdc-checkbox__checkmark"
+														 viewBox="0 0 24 24">
+													<path class="mdc-checkbox__checkmark-path"
+																fill="none"
+																stroke="white"
+																d="M1.73,12.91 8.1,19.28 22.79,4.59"/>
+												</svg>
+												<div class="mdc-checkbox__mixedmark"></div>
+											</div>
+										</div>
+										<label for="my-checkbox" class="checkbox-label">Venous Beading</label>
+									</div>
+									<br>
+
+									<div class="checkbox-container">
+										<div class="mdc-checkbox">
+											<input type="checkbox"
+														 id="venous-redup"
+														 name="venous-redup"
+														 class="mdc-checkbox__native-control"/>
+											<div class="mdc-checkbox__background">
+												<svg class="mdc-checkbox__checkmark"
+														 viewBox="0 0 24 24">
+													<path class="mdc-checkbox__checkmark-path"
+																fill="none"
+																stroke="white"
+																d="M1.73,12.91 8.1,19.28 22.79,4.59"/>
+												</svg>
+												<div class="mdc-checkbox__mixedmark"></div>
+											</div>
+										</div>
+										<label for="my-checkbox" class="checkbox-label">Venous Reduplication</label>
+									</div>
+									<br>
+
+									<div class="checkbox-container">
+										<div class="mdc-checkbox">
+											<input type="checkbox"
+														 id="blot"
+														 name="blot"
+														 class="mdc-checkbox__native-control"/>
+											<div class="mdc-checkbox__background">
+												<svg class="mdc-checkbox__checkmark"
+														 viewBox="0 0 24 24">
+													<path class="mdc-checkbox__checkmark-path"
+																fill="none"
+																stroke="white"
+																d="M1.73,12.91 8.1,19.28 22.79,4.59"/>
+												</svg>
+												<div class="mdc-checkbox__mixedmark"></div>
+											</div>
+										</div>
+										<label for="my-checkbox" class="checkbox-label">Blot Hemorrhage</label>
+									</div>
+									<br>
+
+								</div>							
+
+								<div class="col">
+
+									<div class="checkbox-container">
+										<div class="mdc-checkbox">
+											<input type="checkbox"
+														 id="flame"
+														 name="flame"
+														 class="mdc-checkbox__native-control"/>
+											<div class="mdc-checkbox__background">
+												<svg class="mdc-checkbox__checkmark"
+														 viewBox="0 0 24 24">
+													<path class="mdc-checkbox__checkmark-path"
+																fill="none"
+																stroke="white"
+																d="M1.73,12.91 8.1,19.28 22.79,4.59"/>
+												</svg>
+												<div class="mdc-checkbox__mixedmark"></div>
+											</div>
+										</div>
+										<label for="my-checkbox" class="checkbox-label">Flame Hemorrhage</label>
+									</div>
+									<br>
+
+									<div class="checkbox-container">
+										<div class="mdc-checkbox">
+											<input type="checkbox"
+														 id="irma"
+														 name="irma"
+														 class="mdc-checkbox__native-control"/>
+											<div class="mdc-checkbox__background">
+												<svg class="mdc-checkbox__checkmark"
+														 viewBox="0 0 24 24">
+													<path class="mdc-checkbox__checkmark-path"
+																fill="none"
+																stroke="white"
+																d="M1.73,12.91 8.1,19.28 22.79,4.59"/>
+												</svg>
+												<div class="mdc-checkbox__mixedmark"></div>
+											</div>
+										</div>
+										<label for="my-checkbox" class="checkbox-label">IRMA</label>
+									</div>
+									<br>
+
+									<div class="checkbox-container">
+										<div class="mdc-checkbox">
+											<input type="checkbox"
+														 id="cotton-wool"
+														 name="cotton-wool"
+														 class="mdc-checkbox__native-control"/>
+											<div class="mdc-checkbox__background">
+												<svg class="mdc-checkbox__checkmark"
+														 viewBox="0 0 24 24">
+													<path class="mdc-checkbox__checkmark-path"
+																fill="none"
+																stroke="white"
+																d="M1.73,12.91 8.1,19.28 22.79,4.59"/>
+												</svg>
+												<div class="mdc-checkbox__mixedmark"></div>
+											</div>
+										</div>
+										<label for="my-checkbox" class="checkbox-label">Cotton Wool</label>
+									</div>
+									<br>
+
+									<div class="checkbox-container">
+										<div class="mdc-checkbox">
+											<input type="checkbox"
+														 id="hard-exudates"
+														 name="hard-exudates"
+														 class="mdc-checkbox__native-control"/>
+											<div class="mdc-checkbox__background">
+												<svg class="mdc-checkbox__checkmark"
+														 viewBox="0 0 24 24">
+													<path class="mdc-checkbox__checkmark-path"
+																fill="none"
+																stroke="white"
+																d="M1.73,12.91 8.1,19.28 22.79,4.59"/>
+												</svg>
+												<div class="mdc-checkbox__mixedmark"></div>
+											</div>
+										</div>
+										<label for="my-checkbox" class="checkbox-label">Hard Exudates</label>
+									</div>
+									<br>
+								</div>
+								<div class="col">
+
+									<div class="checkbox-container">
+										<div class="mdc-checkbox">
+											<input type="checkbox"
+														 id="neovascularization"
+														 name="neovascularization"
+														 class="mdc-checkbox__native-control"/>
+											<div class="mdc-checkbox__background">
+												<svg class="mdc-checkbox__checkmark"
+														 viewBox="0 0 24 24">
+													<path class="mdc-checkbox__checkmark-path"
+																fill="none"
+																stroke="white"
+																d="M1.73,12.91 8.1,19.28 22.79,4.59"/>
+												</svg>
+												<div class="mdc-checkbox__mixedmark"></div>
+											</div>
+										</div>
+										<label for="my-checkbox" class="checkbox-label">Neovascularization</label>
+									</div>
+									<br>
+
+									<div class="checkbox-container">
+										<div class="mdc-checkbox">
+											<input type="checkbox"
+														 id="macular-edema"
+														 name="macular-edema"
+														 class="mdc-checkbox__native-control"/>
+											<div class="mdc-checkbox__background">
+												<svg class="mdc-checkbox__checkmark"
+														 viewBox="0 0 24 24">
+													<path class="mdc-checkbox__checkmark-path"
+																fill="none"
+																stroke="white"
+																d="M1.73,12.91 8.1,19.28 22.79,4.59"/>
+												</svg>
+												<div class="mdc-checkbox__mixedmark"></div>
+											</div>
+										</div>
+										<label for="my-checkbox" class="checkbox-label">Macular Edema</label>
+									</div>
+									<br>
+
+									<div class="checkbox-container">
+										<div class="mdc-checkbox">
+											<input type="checkbox"
+														 id="prior-treatment"
+														 name="prior-treatment"
+														 class="mdc-checkbox__native-control"/>
+											<div class="mdc-checkbox__background">
+												<svg class="mdc-checkbox__checkmark"
+														 viewBox="0 0 24 24">
+													<path class="mdc-checkbox__checkmark-path"
+																fill="none"
+																stroke="white"
+																d="M1.73,12.91 8.1,19.28 22.79,4.59"/>
+												</svg>
+												<div class="mdc-checkbox__mixedmark"></div>
+											</div>
+										</div>
+										<label for="my-checkbox" class="checkbox-label">Prior Treatment</label>
+									</div>
+									<br>
+								</div>
+							</div>
+						</div>
+					</div>
+					<div class="mdc-layout-grid__cell--span-1">
+						<div class="mdc-card">
+							<div class="spacer-45"></div>
+							<div class="mdc-card__media-content">
+								<button class="mdc-button mdc-button--raised submit-button" disabled>
+									Submit
+								</button>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+
+				
+		</div>
+		<!--Libraries-->
+
+		<script type="text/javascript" src="{{ url_for('static', filename = 'node_modules/material-components-web/dist/material-components-web.js') }}"></script>
+		<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
+		<!--Code-->
+		<script type="text/javascript" src="{{ url_for('static', filename = 'upload.js') }}"></script>
+	</body>
+</html>
+

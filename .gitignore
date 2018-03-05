@@ -9,3 +9,4 @@ ckpts
 *.pyc
 model
 images
+node_modules

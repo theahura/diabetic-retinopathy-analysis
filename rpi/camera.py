@@ -10,7 +10,7 @@ import tempfile
 import time
 
 from PIL import Image
-from easygui import ccbox
+from easygui import ccbox, ynbox
 import requests
 
 # import os
@@ -41,97 +41,102 @@ def main():
         GPIO.output(23, GPIO.HIGH)
 
 
+    done = False
 
+    #Load picamera and begin preview
     camera = picamera.PiCamera()
+    camera.resolution = (512, 512)
     try:
-        #Load picamera and begin preview
-        camera.resolution = (512, 512)
-        stream = io.BytesIO()
+        while not done:
+            stream = io.BytesIO()
 
-        camera.start_preview()
-        if not auto:
-            #Wait for shutter press
-            GPIO.wait_for_edge(17, GPIO.FALLING)
-            GPIO.output(22, GPIO.LOW)
-            GPIO.output(23, GPIO.HIGH)
+            camera.start_preview()
+            if not auto:
+                #Wait for shutter press
+                GPIO.wait_for_edge(17, GPIO.FALLING)
+                GPIO.output(22, GPIO.LOW)
+                GPIO.output(23, GPIO.HIGH)
+                
+            else:
+                #Delay
+                time.sleep(3)
             
-        else:
-            #Delay
-            time.sleep(3)
-        
-        camera.capture(stream, 'jpeg')
-        camera.stop_preview()
+            camera.capture(stream, 'jpeg')
+            camera.stop_preview()
 
-        
+            
 
-        #Process image and save in temp file
-        image = Image.open(stream)
-        # image = Image.open(os.path.expanduser("~/Downloads/217_left.jpeg"))
-        orig_size = image.size
-        image.thumbnail((512, 512), Image.ANTIALIAS)
-        tf = tempfile.NamedTemporaryFile()
-        image.save(tf, format='jpeg')
+            #Process image and save in temp file
+            image = Image.open(stream)
+            # image = Image.open(os.path.expanduser("~/Downloads/217_left.jpeg"))
+            orig_size = image.size
+            image.thumbnail((512, 512), Image.ANTIALIAS)
+            tf = tempfile.NamedTemporaryFile()
+            image.save(tf, format='jpeg')
 
-        #Display selection GUI
-        print "Loading GUI"
-        reply = ccbox("Do you want to analyze this image?", "Image Viewer", 
-            image=tf.name)
+            #Display selection GUI
+            print "Loading GUI"
+            reply = ccbox("Do you want to analyze this image?", "Image Viewer", 
+                image=tf.name)
 
-        #Resize image back to original size for server
-        image = image.resize(orig_size)
-        image_binary =  io.BytesIO()
-        image.save(image_binary, format='jpeg')
-        image_binary.seek(0)
+            #Resize image back to original size for server
+            image = image.resize(orig_size)
+            image_binary =  io.BytesIO()
+            image.save(image_binary, format='jpeg')
+            image_binary.seek(0)
 
-        #Send uploaded image to server
-        if reply == True:
-            #Send image to server             
-            print "Sending image to server"
-            res = requests.post(
-                UPLOAD_URL,
-                files={'image': ('image.jpg', image_binary)}
-            )
-            res.raise_for_status()
-            res_json = res.json()
-
-            #Diabetic retinopathy prediction
-            pred = res_json.pop("pred", None)
-
-            #Collect processed images for display
-            print "Obtaining model results..."
-            image_dict = {}
-            for im in res_json:
-                image_url = REQUEST_IMAGE_URL + "/{}".format(res_json[im])
-
-                res = requests.get(image_url)
+            #Send uploaded image to server
+            if reply == True:
+                #Send image to server             
+                print "Sending image to server"
+                res = requests.post(
+                    UPLOAD_URL,
+                    files={'image': ('image.jpg', image_binary)}
+                )
                 res.raise_for_status()
-                im_data = Image.open(io.BytesIO(res.content))
+                res_json = res.json()
 
-                image_dict[im] = im_data
-                time.sleep(0.1)
+                #Diabetic retinopathy prediction
+                pred = res_json.pop("pred", None)
+
+                #Collect processed images for display
+                print "Obtaining model results..."
+                image_dict = {}
+                for im in res_json:
+                    image_url = REQUEST_IMAGE_URL + "/{}".format(res_json[im])
+
+                    res = requests.get(image_url)
+                    res.raise_for_status()
+                    im_data = Image.open(io.BytesIO(res.content))
+
+                    image_dict[im] = im_data
+                    time.sleep(0.1)
 
 
-            #Display results to user
-            fig = plt.figure(figsize=(10,8))
+                #Display results to user
+                fig = plt.figure(figsize=(10,8))
 
-            plt.subplot(221)
-            plt.imshow(image)
-            plt.title('Original Image')
+                plt.subplot(221)
+                plt.imshow(image)
+                plt.title('Original Image')
 
-            plt.subplot(222)
-            plt.imshow(image_dict["im_p"])
-            plt.title("Processed Image")
+                plt.subplot(222)
+                plt.imshow(image_dict["im_p"])
+                plt.title("Processed Image")
 
-            plt.subplot(223)
-            plt.imshow(image_dict["hm"])
-            plt.title("Heatmap")
+                plt.subplot(223)
+                plt.imshow(image_dict["hm"])
+                plt.title("Heatmap")
 
-            plt.subplot(224)
-            plt.imshow(image_dict["hm_im"])
-            plt.title("Heatmap Superimposed Image")
+                plt.subplot(224)
+                plt.imshow(image_dict["hm_im"])
+                plt.title("Heatmap Superimposed Image")
 
-            plt.suptitle('Diabetic Retinopathy Level: {}'.format(pred))
-            plt.show()
+                plt.suptitle('Diabetic Retinopathy Level: {}'.format(pred))
+                plt.show()
+
+            done = not ynbox("Take another picture?", "Continue", ("Yes", "No") )
+
 
     except:
         raise
