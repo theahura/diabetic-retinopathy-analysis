@@ -6,8 +6,9 @@ TODO:
     - add precision, recall, auc, and one off/two off accuracy
     - add test set in
     - try combining multiple eyes
-    - try resnet/capsule net
+    - try resnet/inception/capsule net
     - multilabel classification with new data
+    - add brightness, translation, contrast variance, resolution variance
 """
 
 import os
@@ -50,7 +51,7 @@ ROTATE = True
 FLIP = True
 
 LABELS_FP = './trainLabels.csv'
-DATA_FP = './train_2'
+DATA_FP = './train'
 CKPTS_RESTORE = './ckpts'
 LOGDIR = './logs/'
 
