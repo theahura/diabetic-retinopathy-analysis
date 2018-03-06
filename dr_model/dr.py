@@ -23,6 +23,8 @@ import threading
 
 import IPython
 
+import models
+
 rng = np.random.RandomState(128)
 random.seed(a=128)
 tf.set_random_seed(128)
@@ -57,6 +59,8 @@ LOGDIR = './logs/'
 
 RESTORE = True
 NUM_LABELS = 5
+
+MODEL = 'basic'
 
 fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f_loss-%s_weights-%f-%f_GAP' % (
     BATCH_SIZE, L2_REG, LR_SCALE, 'nesterov', MOMENTUM, EVEN_CUTOFF, LEAKY,
@@ -284,29 +288,14 @@ class Model(object):
         def leaky(x):
             return tf.nn.leaky_relu(x, LEAKY)
 
-        with slim.arg_scope([slim.conv2d],
-                            activation_fn=leaky,
-                            weights_regularizer=slim.l2_regularizer(L2_REG)):
-            # Block one.
-            self.conv1 = net = slim.conv2d(x, num_outputs=32, kernel_size=7,
-                                           stride=2)
-            self.pool1 = net = slim.max_pool2d(net, kernel_size=3)
-            # Block two.
-            net = slim.repeat(net, 2, slim.conv2d, 32, 3)
-            net = slim.batch_norm(net, is_training=self.is_training)
-            self.pool2 = net = slim.max_pool2d(net, kernel_size=3)
-            # Block three.
-            net = slim.repeat(net, 2, slim.conv2d, 64, 3)
-            net = slim.batch_norm(net, is_training=self.is_training)
-            self.pool3 = net = slim.max_pool2d(net, kernel_size=3)
-            # Block four.
-            net = slim.repeat(net, 4, slim.conv2d, 128, 3)
-            net = slim.batch_norm(net, is_training=self.is_training)
-            self.pool4 = net = slim.max_pool2d(net, kernel_size=3)
+        if MODEL == 'basic':
+            net, endpoints = models.basic_model(x, leaky, L2_REG,
+                                                self.is_training)
 
-            # Block five; GAP.
-            self.feats = slim.conv2d(net, num_outputs=1024, kernel_size=3)
-            self.gap = tf.reduce_mean(self.feats, [1, 2])
+        self.feats = slim.conv2d(net, num_outputs=1024, kernel_size=3,
+                                 activation_fn=leaky,
+                                 weights_regularizer=slim.l2_regularizer(L2_REG))
+        self.gap = tf.reduce_mean(self.feats, [1, 2])
 
         net = slim.dropout(self.gap, 0.5, is_training=is_training)
         self.logits = slim.fully_connected(net, NUM_LABELS,
