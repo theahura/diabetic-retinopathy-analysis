@@ -3,6 +3,9 @@ Tensorflow models.
 """
 
 import tensorflow.contrib.slim as slim
+import IPython
+
+import inception_resnet as ir
 
 
 def basic_model(x, activation, l2_reg, is_training):
@@ -37,3 +40,10 @@ def basic_model(x, activation, l2_reg, is_training):
         endpoints['pool4'] = net
 
     return net, endpoints
+
+
+def inception_resnet(x, is_training, activation):
+    scope = ir.inception_resnet_v2_arg_scope(activation_fn=activation,
+                                             is_training=is_training)
+    with slim.arg_scope(scope):
+        return ir.inception_resnet_v2_base(x, activation_fn=activation)
