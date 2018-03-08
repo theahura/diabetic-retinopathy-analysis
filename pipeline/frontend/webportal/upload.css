@@ -1,3 +1,7 @@
+.mdc-layout-grid {
+	width: 100%
+}
+
 img {
 	align-self: center;
 }
@@ -8,4 +12,24 @@ img {
 
 .preview-image {
 	margin-top: 50px;
+}
+
+.main-container {
+	background: black;
+	text-align: center;
+	height: 100%;
+	width: 100%;
+}
+
+	.main {
+		min-height: 1024px;
+	}
+
+.side {
+	height: 256px;
+	width: 256px;
+	background-size: cover;
+	background-position: center;
+	background-repeat: no-repeat;
+	cursor: pointer;
 }

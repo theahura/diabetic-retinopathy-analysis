@@ -17,10 +17,23 @@
 				<h2 class="mdc-card__subtitle" id="prediction"> </h2>
 			</section>
 			<section class="mdc-card__media">
-				<img id="heatmap-image-display" src="#" class="hidden"/>
-				<img id="process-image-display" src="#" class="hidden"/>
-				<img id="both-image-display" src="#" class="hidden"/>
-				<img id="upload-image-display" src="#" class="hidden"/>
+				<div class="mdc-layout-grid">
+					<div class="mdc-layout-grid__inner">
+						<div class="mdc-layout-grid__cell--span-9">
+							<div class='main-container'>
+								<div class='panzoomed'>
+									<img class='main hidden' id="selected-image" src="#"/>
+								</div>
+							</div>
+						</div>
+						<div class="mdc-layout-grid__cell--span-3">
+							<div class='side' id="heatmap-image-display" src="#" class="hidden"/></div>
+							<div class='side' id="process-image-display" src="#" class="hidden"/></div>
+							<div class='side' id="both-image-display" src="#" class="hidden"/></div>
+							<div class='side' id="upload-image-display" src="#" class="hidden"/></div>
+						</div>
+					</div>
+				</div>
 			</section>
 		</div>
 
@@ -29,6 +42,12 @@
 		<script type="text/javascript" src="{{ url_for('static', filename = 'node_modules/material-components-web/dist/material-components-web.js') }}"></script>
 		<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
 		<script>mdc.autoInit()</script>
+
+		<script type="text/javascript" src="{{ url_for('static', filename =
+			'node_modules/jquery.panzoom/dist/jquery.panzoom.min.js') }}"></script>
+
+		<script type="text/javascript" src="{{ url_for('static', filename =
+			'node_modules/jquery-mousewheel/jquery.mousewheel.js') }}"></script>
 		<!--Code-->
 		<script type="text/javascript" src="{{ url_for('static', filename = 'upload.js') }}"></script>
 	</body>

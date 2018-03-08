@@ -4,6 +4,8 @@
   "description": "Frontend for drcam",
   "main": "upload.js",
   "dependencies": {
+    "jquery-mousewheel": "^3.1.13",
+    "jquery.panzoom": "^3.2.2",
     "material-components-web": "^0.28.0"
   },
   "devDependencies": {},
