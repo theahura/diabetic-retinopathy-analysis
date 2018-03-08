@@ -11,10 +11,9 @@
     </div>
 
 		<div class="mdc-card preview-image">
-			<section class="mdc-card__primary">
+			<section class="mdc-card__primary predictions">
 				<h1 class="mdc-card__title mdc-card__title--large">Image Preview</h1>
 				<h2 class="mdc-card__subtitle"> Predicted DR Severity: </h2>
-				<h2 class="mdc-card__subtitle" id="prediction"> </h2>
 			</section>
 			<section class="mdc-card__media">
 				<div class="mdc-layout-grid">
@@ -26,11 +25,10 @@
 								</div>
 							</div>
 						</div>
-						<div class="mdc-layout-grid__cell--span-3">
-							<div class='side' id="heatmap-image-display" src="#" class="hidden"/></div>
-							<div class='side' id="process-image-display" src="#" class="hidden"/></div>
-							<div class='side' id="both-image-display" src="#" class="hidden"/></div>
-							<div class='side' id="upload-image-display" src="#" class="hidden"/></div>
+						<div class="mdc-layout-grid__cell--span-3 side-container">
+							<div class='side hidden' id="upload-image-display"></div>
+							<div class='side hidden' id="process-image-display"></div>
+							<div class='side hidden' id="both-image-display"></div>
 						</div>
 					</div>
 				</div>
@@ -44,7 +42,7 @@
 		<script>mdc.autoInit()</script>
 
 		<script type="text/javascript" src="{{ url_for('static', filename =
-			'node_modules/jquery.panzoom/dist/jquery.panzoom.min.js') }}"></script>
+			'node_modules/panzoom/dist/panzoom.min.js') }}"></script>
 
 		<script type="text/javascript" src="{{ url_for('static', filename =
 			'node_modules/jquery-mousewheel/jquery.mousewheel.js') }}"></script>

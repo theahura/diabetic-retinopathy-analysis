@@ -1,24 +1,18 @@
 $(document).ready(() => {
 
-	var $panzoom = $('.panzoomed').panzoom();
-	$panzoom.parent().on('mousewheel.focal', function( e ) {
-		e.preventDefault();
-		var delta = e.delta || e.originalEvent.wheelDelta;
-		var zoomOut = delta ? delta < 0 : e.originalEvent.deltaY > 0;
-		console.log(e.clientX + " " + e.clientY)
-		$panzoom.panzoom('zoom', zoomOut, {
-			increment: 0.1,
-			focal: { clientX: e.clientX, clientY: e.clientY}
-		});
-	});
+	var area = $('.panzoomed')[0];
+	panzoom(area, {smoothScroll: false});
 
-	$('.side').click(function() {
-		var bgi = $(this).css('background-image');
-		bgi = bgi.replace('url(','').replace(')','').replace(/\"/gi, "");
-		console.log(bgi)
-		$('#selected-image').attr('src', bgi);
-		$panzoom.panzoom("reset", {animate: false});
-	});
+	function setSideClicks() {
+		$('.side').click(function() {
+			var bgi = $(this).css('background-image');
+			bgi = bgi.replace('url(','').replace(')','').replace(/\"/gi, "");
+			console.log(bgi)
+			$('#selected-image').attr('src', bgi);
+			//panzoom(area, {smoothScroll: false}).zoomAbs(0, 0, 1);
+		});
+	}
+	
 
 	$("#file-upload").change(() => {
 		var input = $('#file-upload')[0];
@@ -46,18 +40,27 @@ $(document).ready(() => {
 				processData: false,
 				contentType: false,
 				success: function(data) {
-					pred = data['pred']
-					$('#prediction').text(pred);
+
 					console.log(data)
-					$('#heatmap-image-display').css('background-image',
-						'url(/image/' + data['hm'][0] + ')');
-					$('#heatmap-image-display').show();	
+
+					for (var index in data['pred']) {
+						var prob = data['pred'][index].toFixed(3);
+						$('.predictions').append(
+							'<p> ' + index + ' : ' + prob + '</p>');
+					}
+
 					$('#process-image-display').css('background-image',
 						'url(/image/' + data['im_p'] + ')');
 					$('#process-image-display').show();	
-					$('#both-image-display').css('background-image',
-						'url(/image/' + data['hm_im'][0] + ')');
-					$('#both-image-display').show();	
+
+					for (var index in data['hm_im']) {
+						$('.side-container').append(
+							'<div class="side hm_im' + index + '"></div>');
+						$('.hm_im' + index).css('background-image',
+							'url(/image/' + data['hm_im'][index] + ')');
+					}	
+
+					setSideClicks();
 				},
 				error: function(jqXHR, textStatus, errorThrown) {
 					console.log(jqXHR);
