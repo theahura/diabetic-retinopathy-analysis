@@ -101,7 +101,7 @@ def block8(net, scale=1.0, activation_fn=tf.nn.relu, scope=None, reuse=None):
 
 
 def inception_resnet_v2_base(inputs,
-                             final_endpoint='Mixed_6a',
+                             final_endpoint='Mixed_6a', # Not giving whole thing
                              output_stride=16,
                              align_feature_maps=False,
                              scope=None,
@@ -275,11 +275,41 @@ def inception_resnet_v2_base(inputs,
         raise ValueError('final_endpoint (%s) not recognized', final_endpoint)
 
 
+def inception_resnet_v2(inputs, is_training=True,
+                        reuse=None,
+                        scope='InceptionResnetV2',
+                        activation_fn=tf.nn.relu):
+    """Creates the Inception Resnet V2 model.
+    Args:
+      inputs: a 4-D tensor of size [batch_size, height, width, 3].
+        Dimension batch_size may be undefined.
+      is_training: whether is training or not.
+      reuse: whether or not the network and its variables should be reused. To be
+        able to reuse 'scope' must be given.
+      scope: Optional variable_scope.
+      activation_fn: Activation function for conv2d.
+    Returns:
+      net: the output of the logits layer (if num_classes is a non-zero integer),
+        or the non-dropped-out input to the logits layer (if num_classes is 0 or
+        None).
+      end_points: the set of end_points from the inception model.
+    """
+    end_points = {}
+
+    with tf.variable_scope(scope, 'InceptionResnetV2', [inputs],
+                           reuse=reuse) as scope:
+        with slim.arg_scope([slim.batch_norm, slim.dropout],
+                            is_training=is_training):
+
+            net, end_points = inception_resnet_v2_base(inputs, scope=scope,
+                                                       activation_fn=activation_fn)
+        return net, end_points
+
+
 def inception_resnet_v2_arg_scope(weight_decay=0.00004,
                                   batch_norm_decay=0.9997,
                                   batch_norm_epsilon=0.001,
-                                  activation_fn=tf.nn.relu,
-                                  is_training=True):
+                                  activation_fn=tf.nn.relu,):
     """Returns the scope with the default parameters for inception_resnet_v2.
     Args:
       weight_decay: the weight decay for weights variables.
@@ -298,10 +328,9 @@ def inception_resnet_v2_arg_scope(weight_decay=0.00004,
             'decay': batch_norm_decay,
             'epsilon': batch_norm_epsilon,
             'fused': None,  # Use fused batch norm if possible.
-            'is_training': is_training
         }
         # Set activation_fn and parameters for batch_norm.
-        with slim.arg_scope([slim.conv2d], activation_fn=activation_fn) as scope:
-                            #normalizer_fn=slim.batch_norm,
-                            #normalizer_params=batch_norm_params) as scope:
+        with slim.arg_scope([slim.conv2d], activation_fn=activation_fn,
+                            normalizer_fn=slim.batch_norm,
+                            normalizer_params=batch_norm_params) as scope:
             return scope

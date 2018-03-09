@@ -121,21 +121,19 @@ def stack_blocks_dense(net, blocks, output_stride=None,
                 if output_stride is not None and current_stride > output_stride:
                     raise ValueError('The target output_stride cannot be reached.')
 
-        with tf.variable_scope('unit_%d' % (i + 1), values=[net]):
-            # If we have reached the target output_stride, then we need to employ
-            # atrous convolution with stride=1 and multiply the atrous rate by the
-            # current unit's stride for use in subsequent layers.
-            if output_stride is not None and current_stride == output_stride:
-                net = block.unit_fn(net, rate=rate, **dict(unit, stride=1))
-                rate *= unit.get('stride', 1)
-
-            else:
-                net = block.unit_fn(net, rate=1, **unit)
-                current_stride *= unit.get('stride', 1)
-                net = slim.utils.collect_named_outputs(outputs_collections, sc.name, net)
-
-    if output_stride is not None and current_stride != output_stride:
-        raise ValueError('The target output_stride cannot be reached.')
+                with tf.variable_scope('unit_%d' % (i + 1), values=[net]):
+                    # If we have reached the target output_stride, then we need to employ
+                    # atrous convolution with stride=1 and multiply the atrous rate by the
+                    # current unit's stride for use in subsequent layers.
+                    if output_stride is not None and current_stride == output_stride:
+                        net = block.unit_fn(net, rate=rate, **dict(unit, stride=1))
+                        rate *= unit.get('stride', 1)
+                    else:
+                        net = block.unit_fn(net, rate=1, **unit)
+                        current_stride *= unit.get('stride', 1)
+                        net = slim.utils.collect_named_outputs(outputs_collections, sc.name, net)
+                        if output_stride is not None and current_stride != output_stride:
+                            raise ValueError('The target output_stride cannot be reached.')
 
     return net
 
@@ -179,6 +177,7 @@ def resnet_arg_scope(weight_decay=0.0001,
         activation_fn=activation_fn,
         normalizer_fn=slim.batch_norm if use_batch_norm else None,
         normalizer_params=batch_norm_params):
+
         with slim.arg_scope([slim.batch_norm], **batch_norm_params):
             # The following implies padding='SAME' for pool1, which makes feature
             # alignment easier for dense prediction tasks. This is also used in

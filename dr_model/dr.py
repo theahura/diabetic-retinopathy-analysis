@@ -46,8 +46,8 @@ VALUES = [i * LR_SCALE for i in [0.001, 0.0005, 0.0001, 0.00001, 0.000001]]
 
 NUM_BATCH_THREADS = 5
 LOADED_BATCH = 7
-BATCH_SIZE = 5
-VAL_BATCH_SIZE = 32
+BATCH_SIZE = 16
+VAL_BATCH_SIZE = 16
 TRANSLATE = False
 ROTATE = True
 FLIP = True
@@ -60,7 +60,7 @@ LOGDIR = './logs/'
 RESTORE = True
 NUM_LABELS = 5
 
-MODEL = 'ir'
+MODEL = 'rn'
 
 fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f_loss-%s_weights-%f-%f_GAP_%s' % (
     BATCH_SIZE, L2_REG, LR_SCALE, 'nesterov', MOMENTUM, EVEN_CUTOFF, LEAKY,
@@ -292,6 +292,8 @@ class Model(object):
             net, endpoints = models.basic_model(x, leaky, L2_REG, is_training)
         elif MODEL == 'ir':
             net, endpoints = models.inception_resnet(x, is_training, leaky)
+        elif MODEL == 'rn':
+            net, endpoints = models.resnet(x, is_training, leaky)
 
         self.endpoints = endpoints
 
