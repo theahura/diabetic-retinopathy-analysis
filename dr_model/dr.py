@@ -6,8 +6,9 @@ TODO:
     - add precision, recall, auc, and one off/two off accuracy
     - add test set in
     - try combining multiple eyes
-    - try resnet/capsule net
+    - try resnet/inception/capsule net
     - multilabel classification with new data
+    - add brightness, translation, contrast variance, resolution variance
 """
 
 import os
@@ -21,6 +22,8 @@ import tensorflow.contrib.slim as slim
 import threading
 
 import IPython
+
+import models
 
 rng = np.random.RandomState(128)
 random.seed(a=128)
@@ -43,23 +46,25 @@ VALUES = [i * LR_SCALE for i in [0.001, 0.0005, 0.0001, 0.00001, 0.000001]]
 
 NUM_BATCH_THREADS = 5
 LOADED_BATCH = 7
-BATCH_SIZE = 64
-VAL_BATCH_SIZE = 64
+BATCH_SIZE = 16
+VAL_BATCH_SIZE = 16
 TRANSLATE = False
 ROTATE = True
 FLIP = True
 
 LABELS_FP = './trainLabels.csv'
-DATA_FP = './train_2'
+DATA_FP = './train'
 CKPTS_RESTORE = './ckpts'
 LOGDIR = './logs/'
 
 RESTORE = True
 NUM_LABELS = 5
 
-fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f_loss-%s_weights-%f-%f_GAP' % (
+MODEL = 'rn'
+
+fname = 'batchsize-%d_l2-%f_lr-%f-train-%s-%f_cutoff-%d_leaky-%f_loss-%s_weights-%f-%f_GAP_%s' % (
     BATCH_SIZE, L2_REG, LR_SCALE, 'nesterov', MOMENTUM, EVEN_CUTOFF, LEAKY,
-    'Kappa+Crossent', MSE_WEIGHT, CX_WEIGHT)
+    'Kappa+Crossent', MSE_WEIGHT, CX_WEIGHT, MODEL)
 
 CKPTS_SAVE = CKPTS_RESTORE + '/' + fname
 
@@ -283,29 +288,19 @@ class Model(object):
         def leaky(x):
             return tf.nn.leaky_relu(x, LEAKY)
 
-        with slim.arg_scope([slim.conv2d],
-                            activation_fn=leaky,
-                            weights_regularizer=slim.l2_regularizer(L2_REG)):
-            # Block one.
-            self.conv1 = net = slim.conv2d(x, num_outputs=32, kernel_size=7,
-                                           stride=2)
-            self.pool1 = net = slim.max_pool2d(net, kernel_size=3)
-            # Block two.
-            net = slim.repeat(net, 2, slim.conv2d, 32, 3)
-            net = slim.batch_norm(net, is_training=self.is_training)
-            self.pool2 = net = slim.max_pool2d(net, kernel_size=3)
-            # Block three.
-            net = slim.repeat(net, 2, slim.conv2d, 64, 3)
-            net = slim.batch_norm(net, is_training=self.is_training)
-            self.pool3 = net = slim.max_pool2d(net, kernel_size=3)
-            # Block four.
-            net = slim.repeat(net, 4, slim.conv2d, 128, 3)
-            net = slim.batch_norm(net, is_training=self.is_training)
-            self.pool4 = net = slim.max_pool2d(net, kernel_size=3)
+        if MODEL == 'basic':
+            net, endpoints = models.basic_model(x, leaky, L2_REG, is_training)
+        elif MODEL == 'ir':
+            net, endpoints = models.inception_resnet(x, is_training, leaky)
+        elif MODEL == 'rn':
+            net, endpoints = models.resnet(x, is_training, leaky)
 
-            # Block five; GAP.
-            self.feats = slim.conv2d(net, num_outputs=1024, kernel_size=3)
-            self.gap = tf.reduce_mean(self.feats, [1, 2])
+        self.endpoints = endpoints
+
+        self.feats = slim.conv2d(net, num_outputs=1024, kernel_size=3,
+                                 activation_fn=leaky,
+                                 weights_regularizer=slim.l2_regularizer(L2_REG))
+        self.gap = tf.reduce_mean(self.feats, [1, 2])
 
         net = slim.dropout(self.gap, 0.5, is_training=is_training)
         self.logits = slim.fully_connected(net, NUM_LABELS,
@@ -379,23 +374,13 @@ class Model(object):
         max_i = tf.argmax(self.levels)
         _input_0 = tf.summary.image('conv0/input0', [x[min_i]])
         _hm0 = tf.summary.image('conv0/hm0', heatmap(min_i, x))
-        _conv1_0 = tf.summary.image('conv1/label0', reshape(self.conv1, min_i))
-        _pool1_0 = tf.summary.image('pool1/label0', reshape(self.pool1, min_i))
-        _pool2_0 = tf.summary.image('pool2/label0', reshape(self.pool2, min_i))
-        _pool3_0 = tf.summary.image('pool3/label0', reshape(self.pool3, min_i))
         _input_4 = tf.summary.image('conv0/input4', [x[max_i]])
         _hm4 = tf.summary.image('conv0/hm4', heatmap(max_i, x))
-        _conv1_4 = tf.summary.image('conv1/label4', reshape(self.conv1, max_i))
-        _pool1_4 = tf.summary.image('pool1/label4', reshape(self.pool1, max_i))
-        _pool2_4 = tf.summary.image('pool2/label4', reshape(self.pool2, max_i))
-        _pool3_4 = tf.summary.image('pool3/label4', reshape(self.pool3, max_i))
 
         self.summary_op = tf.summary.merge([_loss, _reg, _cx, _mse, _kappa,
                                             _grad_norm, _var_norm,
-                                            _logits, _t_acc, _input_0, _conv1_0,
-                                            _pool1_0, _pool2_0, _pool3_0,
-                                            _input_4, _conv1_4, _pool1_4,
-                                            _pool2_4, _pool3_4, _hm0, _hm4] +
+                                            _logits, _t_acc, _input_0,
+                                            _input_4, _hm0, _hm4] +
                                            _grads)
 
         self.saver = tf.train.Saver()
@@ -404,8 +389,11 @@ class Model(object):
 def main():
     # Init batcher, model, session.
     batcher = Batcher(DATA_FP, LABELS_FP, True)
+
     model = Model()
-    sess = tf.Session()
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    sess = tf.Session(config=config)
 
     # Summary writer, acc ops.
     writer = tf.summary.FileWriter(LOGDIR, sess.graph, flush_secs=30)
@@ -447,6 +435,10 @@ def main():
                     labels += batch_data['level'].tolist()
 
                 accs = get_accuracies(preds, labels)
+                print 'Batch Data'
+                print batch_data['level'].values
+                print 'Predictions'
+                print preds
                 print 'Accuracies'
                 print accs
                 accuracy_sum = get_accuracy_summaries(sess, accs, _acc_sums, _acc_plhlds)

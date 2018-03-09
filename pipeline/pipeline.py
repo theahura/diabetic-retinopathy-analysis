@@ -55,17 +55,24 @@ def upload():
         print 'saving'
         file.save(filepath)
         im, preds, hms = model_runner.get_prediction(filepath)
+        hm_fps = []
+        hm_im_fps = []
         print 'got output'
-        hm = cv2.applyColorMap(np.uint8(hms[0]*255), cv2.COLORMAP_JET)
-        hm_fp = os.path.splitext(filepath)[0] + '_hm.png'
-        cv2.imwrite(hm_fp, hm)
+        for i in range(0, model.NUM_LABELS):
+            hm = cv2.applyColorMap(np.uint8(hms[i][0]*255), cv2.COLORMAP_JET)
+            hm_fp = '%s_hm_%d.png' % (os.path.splitext(filepath)[0], i)
+            hm_fps.append(hm_fp)
+            cv2.imwrite(hm_fp, hm)
+            hm_im = hm * 0.5 + im * 0.5
+            hm_im_fp = '%s_hm_process%d.png' % (
+                os.path.splitext(filepath)[0], i)
+            hm_im_fps.append(hm_im_fp)
+            cv2.imwrite(hm_im_fp, hm_im)
         im_fp = os.path.splitext(filepath)[0] + '_processed.png'
         cv2.imwrite(im_fp, im)
-        hm_im = hm * 0.3 + im * 0.5
-        hm_im_fp = os.path.splitext(filepath)[0] + '_hm_process.png'
-        cv2.imwrite(hm_im_fp, hm_im)
         print 'saved output'
-        resp = {'hm': hm_fp, 'pred': preds[0], 'im_p': im_fp, 'hm_im': hm_im_fp}
+        resp = {'hm': hm_fps, 'pred': preds[0].tolist(), 'im_p': im_fp,
+                'hm_im': hm_im_fps}
         return jsonify(resp)
 
 
@@ -78,7 +85,7 @@ def get_image(fp):
 
 
 def main():
-    app.run(debug=False)
+    app.run(debug=True)
 
 
 if __name__ == "__main__":

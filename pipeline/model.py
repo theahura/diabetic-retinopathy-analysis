@@ -53,13 +53,12 @@ class Model(object):
                                            activation_fn=None,
                                            weights_regularizer=slim.l2_regularizer(L2_REG),
                                            scope='fc')
-        sftmx = tf.nn.softmax(self.logits)
+        self.sftmx = sftmx = tf.nn.softmax(self.logits)
         self.preds = tf.cast(tf.argmax(sftmx, 1), tf.int64)
 
         self.saver = tf.train.Saver()
 
-        def heatmap(index):
-            pred = self.preds[index]
+        def heatmap(index, pred):
             fcs = [l for l in tf.global_variables() if l.name.startswith('fc')]
             weights = tf.expand_dims(tf.transpose(fcs[0])[pred], axis=1)
             f = self.feats[index]
@@ -70,9 +69,9 @@ class Model(object):
             cam = tf.div(cam, tf.reduce_max(cam))
             cam = tf.expand_dims(cam, axis=0)
             cam = tf.image.resize_bilinear(cam, [512, 512])
-            return cam 
+            return cam
 
-        self.heatmap = heatmap(0)
+        self.heatmap = [heatmap(0, i) for i in range(0, NUM_LABELS)]
 
 
 class Runner(object):
@@ -90,7 +89,7 @@ class Runner(object):
 
     def get_prediction(self, fp):
         im = dp.process_image(fp)
-        outputs = [self.model.preds, self.model.heatmap]
+        outputs = [self.model.sftmx, self.model.heatmap]
         preds, hms = self.sess.run(outputs, {self.model.x: [im]})
         return im, preds, hms
 
