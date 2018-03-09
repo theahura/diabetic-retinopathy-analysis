@@ -26,6 +26,9 @@ $(document).ready(() => {
 
 				$('#selected-image').attr('src', e.target.result);
 				$('#selected-image').show();	
+
+				$('.pred').remove()
+				$('.hm_im').remove()
 			}
 
 			reader.readAsDataURL(input.files[0]);
@@ -46,7 +49,7 @@ $(document).ready(() => {
 					for (var index in data['pred']) {
 						var prob = data['pred'][index].toFixed(3);
 						$('.predictions').append(
-							'<p> ' + index + ' : ' + prob + '</p>');
+							'<p class="pred"> ' + index + ' : ' + prob + '</p>');
 					}
 
 					$('#process-image-display').css('background-image',
@@ -55,7 +58,7 @@ $(document).ready(() => {
 
 					for (var index in data['hm_im']) {
 						$('.side-container').append(
-							'<div class="side hm_im' + index + '"></div>');
+							'<div class="side hm_im hm_im' + index + '"></div>');
 						$('.hm_im' + index).css('background-image',
 							'url(/image/' + data['hm_im'][index] + ')');
 					}	
