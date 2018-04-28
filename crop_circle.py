@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import argparse
+from PIL import Image
 
 def image_resize(image, width = None, height = None, inter = cv2.INTER_AREA):
     # initialize the dimensions of the image to be resized and
@@ -32,6 +33,7 @@ def image_resize(image, width = None, height = None, inter = cv2.INTER_AREA):
 
     # return the resized image
     return resized
+
 def get_circle(img):
     output = img.copy()
 
@@ -65,7 +67,15 @@ def get_cropped_image(img, cropped_circle):
 
     crop = masked_data[y:y+h, x:x+w] 
 
-    return crop   
+    return crop  
+
+def pil_to_cv(img):
+    img = img.convert('RGB')
+    img = np.array(img)
+    img = img[:, :, ::-1].copy() 
+
+    return img
+
 
 def main():
     parser = argparse.ArgumentParser(description="Find circle within fundus image")
@@ -74,7 +84,11 @@ def main():
     args = parser.parse_args()
     image_file = args.image
 
-    img = cv2.imread(image_file)
+    img = Image.open(image_file)
+    img = pil_to_cv(img)
+
+    
+    
     img = image_resize(img, height=512)
 
     circle = get_circle(img)
