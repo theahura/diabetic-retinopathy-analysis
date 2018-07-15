@@ -131,9 +131,8 @@ public class MainActivity extends AppCompatActivity {
                     public void onResponse(NetworkResponse response) {
                         try {
                             String respdata = new String(response.data);
-                            android.util.Log.i("RESPONSE", respdata);
                             JSONObject obj  = new JSONObject(respdata);
-                            Toast.makeText(getApplicationContext(), obj.getString("pred"), Toast.LENGTH_SHORT).show();
+                            Toast.makeText(getApplicationContext(), obj.getString("pred"), Toast.LENGTH_LONG).show();
                         } catch (JSONException e) {
                             e.printStackTrace();
                         }
